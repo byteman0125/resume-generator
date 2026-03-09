@@ -1981,6 +1981,7 @@ export function JobApplicationsView() {
     try {
       const res = await fetch(`/api/job-applications/${id}`, { method: "DELETE" });
       if (res.ok) {
+        void fetchDuplicateKeys();
         toast.success("Row deleted");
       } else {
         const data = await res.json().catch(() => ({}));
@@ -2017,6 +2018,7 @@ export function JobApplicationsView() {
           fetchApplications(profileFilterId);
           toast.error("Delete failed");
         } else {
+          void fetchDuplicateKeys();
           toast.success(`Deleted ${idsToDelete.length} row(s)`);
         }
       } catch (e) {
@@ -2025,7 +2027,7 @@ export function JobApplicationsView() {
         toast.error("Delete failed");
       }
     },
-    [dataRows, pushHistory, profileFilterId, fetchApplications]
+    [dataRows, pushHistory, profileFilterId, fetchApplications, fetchDuplicateKeys]
   );
 
   const handleTablePaste = useCallback(

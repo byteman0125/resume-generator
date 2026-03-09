@@ -32,8 +32,11 @@ export async function GET(
 
     // Build target URL for print view
     const url = new URL(request.url);
-    const baseUrl =
+    let baseUrl =
       process.env.PDF_BASE_URL || `${url.protocol}//${url.host}`;
+    if (baseUrl.includes("0.0.0.0")) {
+      baseUrl = baseUrl.replace("0.0.0.0", "127.0.0.1");
+    }
     const targetUrl = `${baseUrl}/print/${id}`;
 
     const browser = await chromium.launch();

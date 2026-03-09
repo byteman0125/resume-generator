@@ -27,7 +27,11 @@ export async function POST(request: Request) {
     setPdfData(token, data, templateId);
 
     const url = new URL(request.url);
-    const baseUrl = process.env.PDF_BASE_URL || `${url.protocol}//${url.host}`;
+    let baseUrl = process.env.PDF_BASE_URL || `${url.protocol}//${url.host}`;
+    // 0.0.0.0 is invalid for client navigation (Playwright); use localhost so the browser can connect
+    if (baseUrl.includes("0.0.0.0")) {
+      baseUrl = baseUrl.replace("0.0.0.0", "127.0.0.1");
+    }
     const targetUrl = `${baseUrl}/print/preview?token=${encodeURIComponent(token)}`;
 
     const browser = await chromium.launch();
