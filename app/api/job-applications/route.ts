@@ -1,0 +1,59 @@
+import { NextResponse } from "next/server";
+import { listJobApplications, createJobApplication } from "@/lib/db";
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const profileId = searchParams.get("profile_id");
+    const rows = listJobApplications(profileId ?? undefined);
+    return NextResponse.json(rows);
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json(
+      { error: "Failed to list job applications" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    let date: string;
+    if ("date" in body) {
+      // Allow explicit empty string for date (keeps cell visually empty).
+      date = typeof body.date === "string" ? body.date.trim() : "";
+    } else {
+      // If date is omitted entirely, default to today.
+      date = new Date().toISOString().slice(0, 10);
+    }
+    const company_name =
+      typeof body.company_name === "string" ? body.company_name.trim() : "";
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    const job_url =
+      typeof body.job_url === "string" ? body.job_url.trim() || null : null;
+    const profile_id =
+      typeof body.profile_id === "string" ? body.profile_id || null : null;
+    // Allow explicit "" so new row has empty resume file cell (no auto-fill).
+    const resume_file_name =
+      typeof body.resume_file_name === "string" ? body.resume_file_name.trim() : null;
+    const job_description =
+      typeof body.job_description === "string" ? body.job_description : "";
+    const row = createJobApplication({
+      date,
+      company_name,
+      title,
+      job_url,
+      profile_id,
+      resume_file_name,
+      job_description,
+    });
+    return NextResponse.json(row);
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json(
+      { error: "Failed to create job application" },
+      { status: 500 }
+    );
+  }
+}
