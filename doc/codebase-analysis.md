@@ -24,7 +24,7 @@
 | **app/api/** | REST endpoints: profiles, job-applications, pdf, ai (prompts, generate), templates style, settings, cron |
 | **lib/** | Core types, DB, templates, PDF cache, resume context, utils |
 | **lib/templates/** | Template components (1–4), registry, utils, style file I/O |
-| **components/** | UI primitives (shadcn-style), feature components (resume-preview, pdf-resume, job-applications-view, etc.) |
+| **components/** | UI primitives (shadcn-style), feature components (resume-preview, pdf-resume, etc.). Job applications UI now lives only in the desktop app. |
 | **data/** | JSON persistence (gitignored): profiles.json, job-applications.json, settings.json, ai-prompts.json, template-styles, pdf-cache, job-pdfs |
 
 ---
@@ -139,9 +139,9 @@ Shared helpers in `template-utils.ts`: `renderWithBold`, `splitBullets`, `format
 - **ProfileForm:** Accordion: profile, experience, education, skills; uses ResumeData + onChange.
 - **TemplateStyleSidebar:** Edits style (ResumeStyle) for the selected format; reads/writes via API or local state.
 
-### 8.3 Job applications
+### 8.3 Job applications (desktop-only)
 
-- **JobApplicationsView (`components/job-applications-view.tsx`):** Large component. Table of applications (columns: No, Date, Company, Title, Job URL, Profile, Resume file name, actions). **Search & filter:** Search bar above table (live match count, search input, up/down nav buttons, profile filter dropdown). **Profile filter:** When a profile is selected, table shows only rows with that `profile_id` (`dataRows`); empty rows and “Add more” only when “All profiles”. **Search:** Matches in date, company, title, jobUrl, profile, resume (case-insensitive); Ctrl+F focuses search bar (browser find prevented via document keydown capture); F3 = next match, Shift+F3 = previous; selection and scroll follow current match. “Add” / “Apply” opens a modal: form + resume editor/preview and AI actions. API key from localStorage for `/api/ai/generate`. Resizable columns (localStorage); scroll/load-more for large lists. Spec: `doc/search-feature.md`.
+- **Desktop JobApplicationsView (`desktop/src/components/job-applications-view.tsx`):** Large component. Table of applications (columns: No, Date, Company, Title, Job URL, Profile, Resume file name, actions). **Search & filter:** Search bar above table (live match count, search input, up/down nav buttons, profile filter dropdown). **Profile filter:** When a profile is selected, table shows only rows with that `profile_id` (`dataRows`); empty rows and “Add more” only when “All profiles”. **Search:** Matches in date, company, title, jobUrl, profile, resume (case-insensitive); Ctrl+F focuses search bar; F3 = next match, Shift+F3 = previous; selection and scroll follow current match. “Add” / “Apply” opens a modal: form + resume editor/preview and AI actions. API key from localStorage for `/api/ai/generate`. Resizable columns (localStorage); scroll/load-more for large lists. Spec: `doc/search-feature.md`.
 
 ### 8.4 Builder pages
 
@@ -196,6 +196,6 @@ Shared helpers in `template-utils.ts`: `renderWithBold`, `splitBullets`, `format
 - **PDF:** `lib/pdf-cache.ts`, `lib/pdf-constants.ts`, `lib/generate-pdf.ts`, `app/api/pdf/route.ts`, `app/print/preview/page.tsx`, `components/pdf-resume-client.tsx`
 - **AI:** `app/api/ai/generate/route.ts`, `app/api/ai/prompts/route.ts`, `app/ai/page.tsx`
 - **Profiles & settings:** `app/api/profiles/route.ts`, `app/api/profiles/[id]/route.ts`, `app/api/settings/route.ts`, `lib/resume-context.tsx`
-- **Job applications:** `app/api/job-applications/route.ts`, `app/api/job-applications/[id]/route.ts`, `app/api/job-applications/[id]/pdf/route.ts`, `components/job-applications-view.tsx`
+- **Job applications:** `app/api/job-applications/route.ts`, `app/api/job-applications/[id]/route.ts`, `app/api/job-applications/[id]/pdf/route.ts` (APIs shared with the desktop app; UI is desktop-only).
 - **UI:** `app/layout.tsx`, `components/conditional-shell.tsx`, `components/resume-preview.tsx`, `components/application-resume-editor.tsx`, `components/profile-form.tsx`
 - **Docs:** `doc/codebase-analysis.md`, `doc/search-feature.md`

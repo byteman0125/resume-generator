@@ -59,6 +59,9 @@ interface JobApplication {
   profile_id: string | null;
   resume_file_name: string;
   job_description?: string;
+  /** 0 = not applied, 1 = applied */
+  applied_manually?: number;
+  gpt_chat_url?: string | null;
   created_at: string;
 }
 
@@ -75,7 +78,9 @@ const COLUMN_KEYS = [
   "company",
   "title",
   "jobUrl",
+  "jobDescription",
   "resume",
+  "applied",
 ] as const;
 
 type ColumnKey = (typeof COLUMN_KEYS)[number];
@@ -86,7 +91,9 @@ const COLUMN_INDEX: Record<ColumnKey, number> = {
   company: 2,
   title: 3,
   jobUrl: 4,
-  resume: 5,
+  jobDescription: 5,
+  resume: 6,
+  applied: 7,
 };
 
 type PromptId = 1 | 2 | 3 | 4;
@@ -105,10 +112,12 @@ const DEFAULT_COLUMN_WIDTHS: Record<ColumnKey, number> = {
   company: 160,
   title: 180,
   jobUrl: 220,
-  resume: 260,
+  jobDescription: 260,
+  resume: 220,
+  applied: 80,
 };
 
-const EDITABLE_COLUMNS: ColumnKey[] = ["date", "company", "title", "jobUrl", "resume"];
+const EDITABLE_COLUMNS: ColumnKey[] = ["date", "company", "title", "jobUrl", "jobDescription", "resume"];
 
 function fillPromptTemplate(template: string, replacements: Record<string, string>): string {
   let result = template;
@@ -166,14 +175,31 @@ function buildPromptForButton(
   });
 }
 
+/** Build extraction prompt for core role context (same text as server extractCoreContext). Used only for GPT webview flow. */
+function buildExtractionPromptForGpt(jobDescription: string): string {
+  const jd = (jobDescription ?? "").trim();
+  if (!jd) return "";
+  return (
+    "You are a resume assistant. Extract from the job description below: (1) Job title, (2) 3–5 key responsibilities as short bullet points, (3) 8–12 skills or keywords, (4) Tone/seniority. " +
+    "Output in a clear, consistent format. Do not add commentary.\n\n" +
+    "Job description:\n\n" +
+    jd
+  );
+}
+
 /** Build full prompt for GPT/DeepSeek webview flow. Steps 3 and 4 include bullets when provided. */
 function buildFullPromptForGptStep(
   stepId: PromptId,
   prompts: AiPrompts | null,
   params: { currentCompany: string; lastCompany: string; jobDescription: string },
-  generatedBullets?: { current: string; last: string }
+  generatedBullets?: { current: string; last: string },
+  roleContext?: string | null
 ): string {
-  const basePrompt = buildPromptForButton(stepId, prompts, params);
+  const baseCorePrompt = buildPromptForButton(stepId, prompts, params);
+  const prefix = roleContext && roleContext.trim()
+    ? `Role context (use to tailor):\n${roleContext.trim()}\n\n`
+    : "";
+  const basePrompt = prefix + baseCorePrompt;
   if (stepId === 1 || stepId === 2) return basePrompt;
   const bulletsText = [generatedBullets?.current ?? "", generatedBullets?.last ?? ""]
     .map((s) => s.trim())
@@ -186,7 +212,10 @@ function buildFullPromptForGptStep(
   return basePrompt + "\n\nHere are the experience bullets to extract skills from:\n\n" + bulletsText;
 }
 
-/** Parse skills text (Category: A, B, C lines) into skills array. Reused by API and GPT flows. */
+/** Max skills per category; AI sometimes returns 15–18+ despite prompt limits, so we cap and ignore the rest. */
+const MAX_SKILLS_PER_CATEGORY = 15;
+
+/** Parse skills text (Category: A, B, C lines) into skills array. Reused by API and GPT flows. Caps at MAX_SKILLS_PER_CATEGORY per category. */
 function parseSkillsText(skillsText: string): { id: string; name: string; category: string }[] {
   const lines = skillsText.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
   const skillsArr: { id: string; name: string; category: string }[] = [];
@@ -207,7 +236,29 @@ function parseSkillsText(skillsText: string): { id: string; name: string; catego
       }
     }
   }
-  return skillsArr;
+  return capSkillsPerCategory(skillsArr, MAX_SKILLS_PER_CATEGORY);
+}
+
+/** Keep at most maxPerCategory skills per category; ignore the rest and reassign ids. */
+function capSkillsPerCategory(
+  skills: { id: string; name: string; category: string }[],
+  maxPerCategory: number
+): { id: string; name: string; category: string }[] {
+  const byCategory = new Map<string, { id: string; name: string; category: string }[]>();
+  for (const s of skills) {
+    const cat = s.category || "Other";
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    const list = byCategory.get(cat)!;
+    if (list.length < maxPerCategory) list.push(s);
+  }
+  const out: { id: string; name: string; category: string }[] = [];
+  let id = 0;
+  for (const list of Array.from(byCategory.values())) {
+    for (const s of list) {
+      out.push({ id: `skill-${id++}`, name: s.name, category: s.category });
+    }
+  }
+  return out;
 }
 
 /** Display date as MM/DD for current year, MM/DD/YYYY for other years. Input: YYYY-MM-DD. */
@@ -531,6 +582,33 @@ export function JobApplicationsView() {
     []
   );
 
+  /** Start a fresh DeepSeek chat session (click the \"new chat\" button in the webview). */
+  const startNewGptChatSession = useCallback(async () => {
+    const wv = deepSeekWebViewRef.current as unknown as {
+      executeJavaScript?: (code: string, userGesture?: boolean) => Promise<unknown>;
+    } | null;
+    if (typeof wv?.executeJavaScript !== "function") return;
+    const code = `(function(){
+      try {
+        var buttons = document.querySelectorAll('div.ds-icon-button.ds-icon-button--xl.ds-icon-button--sizing-container[role="button"]');
+        for (var i = 0; i < buttons.length; i++) {
+          var path = buttons[i].querySelector('svg path');
+          if (path && path.getAttribute('d') && path.getAttribute('d').indexOf('9.2192 6.36949') !== -1) {
+            buttons[i].click();
+            return true;
+          }
+        }
+      } catch (e) {}
+      return false;
+    })();`;
+    try {
+      await wv.executeJavaScript!(code, true);
+    } catch {
+      // ignore errors; best-effort
+    }
+  }, []);
+
+
   const EMPTY_ROW_BATCH = 1000;
   const [emptyRowCount, setEmptyRowCount] = useState(50);
   const [emptyRowLimit, setEmptyRowLimit] = useState(EMPTY_ROW_BATCH);
@@ -568,6 +646,26 @@ export function JobApplicationsView() {
 
   /** Applications for the selected profile (loaded from backend; no client-side filter). */
   const dataRows = useMemo<RowItem[]>(() => applications, [applications]);
+
+  const [bulkGptRunning, setBulkGptRunning] = useState(false);
+  const [bulkGptProgress, setBulkGptProgress] = useState<{ done: number; total: number }>({
+    done: 0,
+    total: 0,
+  });
+  const [bulkInProgressIds, setBulkInProgressIds] = useState<Set<string>>(new Set());
+  const [bulkCancelRequested, setBulkCancelRequested] = useState(false);
+  const bulkCancelRef = useRef(false);
+
+  const bulkEligibleApps = useMemo<JobApplication[]>(() => {
+    return dataRows
+      .filter((app): app is JobApplication => app != null && !isPlaceholder(app))
+      .filter(
+        (app) =>
+          !app.applied_manually &&
+          (app.job_description ?? "").trim() !== "" &&
+          !Boolean(app.resume_file_name)
+      );
+  }, [dataRows]);
 
   useEffect(() => {
     if (!profileFilterId && profiles.length > 0) {
@@ -672,21 +770,38 @@ export function JobApplicationsView() {
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, []);
-  const saveGptChatUrlForApp = useCallback((appId: string, url: string) => {
-    const trimmed = (url || "").trim();
-    if (!appId || !trimmed) return;
-    setGptChatUrls((prev) => {
-      const next = { ...prev, [appId]: trimmed };
-      try {
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem("resume-builder-gpt-chat-urls", JSON.stringify(next));
+  const saveGptChatUrlForApp = useCallback(
+    (appId: string, url: string) => {
+      const trimmed = (url || "").trim();
+      if (!appId || !trimmed) return;
+      // Update in-memory map + localStorage for quick lookup.
+      setGptChatUrls((prev) => {
+        const next = { ...prev, [appId]: trimmed };
+        try {
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem("resume-builder-gpt-chat-urls", JSON.stringify(next));
+          }
+        } catch {
+          // ignore storage errors
         }
-      } catch {
-        // ignore storage errors
-      }
-      return next;
-    });
-  }, []);
+        return next;
+      });
+      // Persist to backend DB so the chat URL is not lost.
+      setApplications((prev) =>
+        prev.map((a) => (a.id === appId ? { ...a, gpt_chat_url: trimmed } : a))
+      );
+      void fetch(`/api/job-applications/${appId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gpt_chat_url: trimmed }),
+      }).catch((err) => {
+        console.error("Failed to save gpt_chat_url:", err);
+      });
+    },
+    [setApplications]
+  );
+  /** AI prompt templates loaded from /api/ai/prompts (shared with AI settings page). */
+  const [aiPrompts, setAiPrompts] = useState<AiPrompts | null>(null);
   useEffect(() => {
     if (!addOpen) {
       setHighlightTarget(null);
@@ -711,6 +826,161 @@ export function JobApplicationsView() {
       cancelled = true;
     };
   }, []);
+
+  const runGptPipelineForApplication = useCallback(
+    async (app: JobApplication): Promise<StoredProfileData | null> => {
+      const jd = (app.job_description ?? "").trim();
+      if (!jd || !aiPrompts) return null;
+      const profileId = app.profile_id ?? currentProfileId;
+      if (!profileId) return null;
+
+      // Use a fresh DeepSeek chat for each job so history is not mixed across applications.
+      if (bulkCancelRef.current) return null;
+      await startNewGptChatSession();
+      if (bulkCancelRef.current) return null;
+
+      let loaded: ResumeData = defaultResumeData;
+      try {
+        const res = await fetch(`/api/profiles/${profileId}`);
+        if (res.ok) {
+          const body = (await res.json()) as { data: ResumeData };
+          loaded = body.data ?? defaultResumeData;
+        }
+      } catch {
+        // fall back to defaultResumeData
+      }
+
+      let resume: ResumeData = {
+        ...loaded,
+        profile: { ...loaded.profile, summary: "" },
+        skills: [],
+        experience: (loaded.experience ?? []).map((exp: Experience) => ({
+          ...exp,
+          description: "",
+        })),
+      };
+
+      const exps = resume.experience ?? [];
+      const currentCompanyName = exps[0]?.company?.trim() || app.company_name.trim();
+      const lastCompanyName = exps[1]?.company?.trim() || "";
+      const params = {
+        currentCompany: currentCompanyName,
+        lastCompany: lastCompanyName,
+        jobDescription: jd,
+      };
+
+      if (bulkCancelRef.current) return null;
+      const extractionPrompt = buildExtractionPromptForGpt(jd);
+      const extractedContext = extractionPrompt
+        ? (await runGptStepInWebview(extractionPrompt))?.trim() ?? ""
+        : "";
+      if (!extractedContext) return null;
+
+      // Step 1: current company bullets
+      if (bulkCancelRef.current) return null;
+      const prompt1 = buildFullPromptForGptStep(1, aiPrompts, params, undefined, extractedContext);
+      const result1 = await runGptStepInWebview(prompt1);
+      if (!result1?.trim()) return null;
+      const currentBullets = result1.trim();
+      resume = {
+        ...resume,
+        experience: (() => {
+          const list = [...(resume.experience ?? [])];
+          if (list[0]) list[0] = { ...list[0], description: currentBullets };
+          return list;
+        })(),
+      };
+
+      // Step 2: last company bullets (optional)
+      let lastBullets = "";
+      if (lastCompanyName) {
+        if (bulkCancelRef.current) return null;
+        const prompt2 = buildFullPromptForGptStep(2, aiPrompts, params, undefined, extractedContext);
+        const result2 = await runGptStepInWebview(prompt2);
+        if (!result2?.trim()) return null;
+        lastBullets = result2.trim();
+        resume = {
+          ...resume,
+          experience: (() => {
+            const list = [...(resume.experience ?? [])];
+            if (list[1]) list[1] = { ...list[1], description: lastBullets };
+            return list;
+          })(),
+        };
+      }
+
+      // Step 3: summary
+      if (bulkCancelRef.current) return null;
+      const prompt3 = buildFullPromptForGptStep(
+        3,
+        aiPrompts,
+        params,
+        { current: currentBullets, last: lastBullets },
+        extractedContext
+      );
+      const result3 = await runGptStepInWebview(prompt3);
+      if (!result3?.trim()) return null;
+      const summary = result3.trim();
+      resume = {
+        ...resume,
+        profile: { ...resume.profile, summary },
+      };
+
+      // Step 4: skills
+      if (bulkCancelRef.current) return null;
+      const prompt4 = buildFullPromptForGptStep(
+        4,
+        aiPrompts,
+        params,
+        { current: currentBullets, last: lastBullets },
+        extractedContext
+      );
+      const result4 = await runGptStepInWebview(prompt4);
+      if (!result4?.trim()) return null;
+      const skillsText = result4.trim();
+      const skillsArr = parseSkillsText(skillsText);
+      resume = {
+        ...resume,
+        skills: skillsArr,
+      };
+
+      if (!bulkCancelRef.current) {
+        await captureCurrentGptChatUrl(app.id);
+      }
+
+      // Normalize skills and attach style for PDF generation.
+      const rawSkills = resume.skills ?? [];
+      const normalizedSkills: { id: string; name: string; category?: string }[] = [];
+      let id = 0;
+      for (const s of rawSkills) {
+        const category = (s.category || "").trim() || "Other";
+        const names = (s.name || "").split(",").map((n: string) => n.trim()).filter(Boolean);
+        for (const name of names) {
+          normalizedSkills.push({ id: `skill-pdf-${id++}`, name, category });
+        }
+      }
+
+      let style = APPLICATION_RESUME_STYLE;
+      const formatId = applicationModalFormatIdRef.current;
+      try {
+        const res = await fetch(`/api/templates/${formatId}/style`);
+        if (res.ok) {
+          const json = await res.json();
+          style = json as typeof APPLICATION_RESUME_STYLE;
+        }
+      } catch {
+        // ignore and fall back to APPLICATION_RESUME_STYLE
+      }
+
+      const stored: StoredProfileData = {
+        ...resume,
+        skills: normalizedSkills,
+        style,
+      };
+      return stored;
+    },
+    [aiPrompts, currentProfileId, runGptStepInWebview, captureCurrentGptChatUrl]
+  );
   const keyboardScrollTargetRef = useRef<{ row: number; col: number } | null>(null);
   const keyboardScrollRafRef = useRef<number | null>(null);
   const [editingCell, setEditingCell] = useState<{
@@ -749,8 +1019,6 @@ export function JobApplicationsView() {
   });
   /** Chat URL captured during the current modal session before a new application has an id. */
   const [pendingGptChatUrl, setPendingGptChatUrl] = useState<string | null>(null);
-  /** AI prompt templates loaded from /api/ai/prompts (shared with AI settings page). */
-  const [aiPrompts, setAiPrompts] = useState<AiPrompts | null>(null);
   /** Whether the 4-step AI pipeline is currently running. */
   const [aiPipelineRunning, setAiPipelineRunning] = useState(false);
   /** Whether the GPT (DeepSeek webview) 4-step pipeline is running. */
@@ -762,6 +1030,11 @@ export function JobApplicationsView() {
     3: false,
     4: false,
   });
+  /** In-memory role context and chat history for the current job's 4-step AI run (API flow). */
+  const [roleContext, setRoleContext] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<
+    { role: "user" | "assistant" | "system"; content: string }[]
+  >([]);
 
   const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(() => {
     if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS;
@@ -842,6 +1115,7 @@ export function JobApplicationsView() {
     else if (key === "company") patch.company_name = value;
     else if (key === "title") patch.title = value;
     else if (key === "jobUrl") patch.job_url = value || null;
+    else if (key === "jobDescription") patch.job_description = value;
     else if (key === "resume") patch.resume_file_name = value;
 
     if (Object.keys(patch).length === 0) {
@@ -2013,6 +2287,10 @@ export function JobApplicationsView() {
                 break;
               }
               case 5: {
+                cells.push(a.job_description ?? "");
+                break;
+              }
+              case 6: {
                 cells.push(a.resume_file_name ?? "");
                 break;
               }
@@ -2032,15 +2310,56 @@ export function JobApplicationsView() {
 
       // Paste from clipboard with Ctrl/Cmd + V
       if (ctrl && !e.shiftKey && (e.key === "v" || e.key === "V")) {
+        // If an inline editor is open, let the browser handle paste into the input.
+        if (editingCell) {
+          return;
+        }
         const startRow = selectedRange?.endRow ?? 1;
         const startCol = selectedRange?.endCol ?? 0;
+        const singleCellSelected =
+          selectedRange &&
+          selectedRange.startRow === selectedRange.endRow &&
+          selectedRange.startCol === selectedRange.endCol;
+        const colIndex = startCol;
+
         if (typeof navigator !== "undefined" && typeof navigator.clipboard?.readText === "function") {
           e.preventDefault();
           navigator.clipboard
             .readText()
             .then((text) => {
               if (!text) return;
-              void handleTablePaste({ clipboardData: { getData: () => text }, preventDefault() {} } as unknown as React.ClipboardEvent, startRow - 1, startCol);
+
+              // If exactly one Job description cell is selected, treat the entire text (including newlines)
+              // as that single cell's value instead of splitting across multiple rows.
+              if (singleCellSelected && colIndex === COLUMN_INDEX.jobDescription) {
+                const rowIndex = startRow - 1;
+                if (rowIndex >= 0 && rowIndex < dataRows.length) {
+                  const app = dataRows[rowIndex];
+                  if (app && !isPlaceholder(app)) {
+                    const id = (app as JobApplication).id;
+                    const patch: Partial<JobApplication> = { job_description: text };
+                    setApplications((prev) => {
+                      pushHistory(prev);
+                      return prev.map((a) => (a.id === id ? { ...a, ...patch } : a));
+                    });
+                    void fetch(`/api/job-applications/${id}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(patch),
+                    }).catch((err) => {
+                      console.error("Paste job description failed:", err);
+                    });
+                    return;
+                  }
+                }
+              }
+
+              // Fallback: grid-style paste (multiple rows/columns).
+              void handleTablePaste(
+                { clipboardData: { getData: () => text }, preventDefault() {} } as unknown as React.ClipboardEvent,
+                startRow - 1,
+                startCol
+              );
             })
             .catch((err) => {
               console.error("Paste from clipboard failed:", err);
@@ -2121,6 +2440,7 @@ export function JobApplicationsView() {
             else if (colKey === "company") patch.company_name = "";
             else if (colKey === "title") patch.title = "";
             else if (colKey === "jobUrl") patch.job_url = null;
+            else if (colKey === "jobDescription") patch.job_description = "";
             else if (colKey === "resume") patch.resume_file_name = "";
           }
           if (Object.keys(patch).length > 0) {
@@ -2310,6 +2630,10 @@ export function JobApplicationsView() {
             patchesByRow.set(rowIndex, patch);
           } else if (tableCol === 5) {
             const patch = patchesByRow.get(rowIndex) ?? {};
+            patch.job_description = value;
+            patchesByRow.set(rowIndex, patch);
+          } else if (tableCol === 6) {
+            const patch = patchesByRow.get(rowIndex) ?? {};
             patch.resume_file_name = value;
             patchesByRow.set(rowIndex, patch);
           }
@@ -2389,6 +2713,98 @@ export function JobApplicationsView() {
     [applications, pushHistory, dataRows, showEmptyRows, fetchDuplicateKeys, profileFilterId]
   );
 
+  const handleBulkGptGenerate = useCallback(
+    async () => {
+      if (bulkEligibleApps.length === 0 || !aiPrompts) return;
+      // If already running, treat click as a stop request.
+      if (bulkGptRunning) {
+        setBulkCancelRequested(true);
+        bulkCancelRef.current = true;
+        return;
+      }
+      setBulkCancelRequested(false);
+      bulkCancelRef.current = false;
+      setBulkGptRunning(true);
+      setBulkGptProgress({ done: 0, total: bulkEligibleApps.length });
+      setBulkInProgressIds(new Set());
+      let successCount = 0;
+      let processedCount = 0;
+      for (let i = 0; i < bulkEligibleApps.length; i++) {
+        if (bulkCancelRef.current) break;
+        const app = bulkEligibleApps[i]!;
+        setBulkInProgressIds((prev) => {
+          const next = new Set(prev);
+          next.add(app.id);
+          return next;
+        });
+        try {
+          const stored = await runGptPipelineForApplication(app);
+          if (!stored) continue;
+          const templateId = formatIdToTemplateId(applicationModalFormatIdRef.current);
+          const pdfRes = await fetch("/api/pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data: stored, templateId: templateId ?? undefined }),
+          });
+          if (!pdfRes.ok) continue;
+          const blob = await pdfRes.blob();
+          const uploadRes = await fetch(`/api/job-applications/${app.id}/pdf`, {
+            method: "POST",
+            headers: { "Content-Type": "application/pdf" },
+            body: blob,
+          });
+          if (!uploadRes.ok) continue;
+          // Reload row so resume_file_name and gpt_chat_url are up to date.
+          try {
+            const rowRes = await fetch(`/api/job-applications/${app.id}`);
+            if (rowRes.ok) {
+              const updated = (await rowRes.json()) as JobApplication;
+              setApplications((prev) =>
+                prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a))
+              );
+            }
+          } catch {
+            // ignore row reload errors
+          }
+          successCount += 1;
+        } catch (err) {
+          console.error("Bulk GPT generation failed for app", app.id, err);
+        } finally {
+          processedCount += 1;
+          setBulkInProgressIds((prev) => {
+            const next = new Set(prev);
+            next.delete(app.id);
+            return next;
+          });
+          setBulkGptProgress({ done: processedCount, total: bulkEligibleApps.length });
+        }
+      }
+      setBulkGptRunning(false);
+      setBulkCancelRequested(false);
+      bulkCancelRef.current = false;
+      setBulkInProgressIds(new Set());
+      if (successCount === 0) {
+        toast.error("Bulk GPT generation failed for all rows");
+      } else if (processedCount < bulkEligibleApps.length) {
+        toast.success(`Bulk generation stopped after ${successCount} of ${bulkEligibleApps.length} resumes`);
+      } else if (successCount < bulkEligibleApps.length) {
+        toast.success(`Generated ${successCount} of ${bulkEligibleApps.length} resumes`);
+      } else {
+        toast.success(`Generated ${successCount} resumes`);
+      }
+      void fetchDuplicateKeys();
+    },
+    [
+      aiPrompts,
+      bulkEligibleApps,
+      bulkGptRunning,
+      bulkCancelRequested,
+      runGptPipelineForApplication,
+      setApplications,
+      fetchDuplicateKeys,
+    ]
+  );
+
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
       <div className="flex flex-col min-h-0 flex-1 min-w-0 overflow-hidden container mx-auto px-4 py-4">
@@ -2406,7 +2822,7 @@ export function JobApplicationsView() {
                 <span>Today: <strong className="text-foreground font-semibold">{tableStats.todayCount}</strong></span>
                 <span>Available: <strong className="text-foreground font-semibold">{tableStats.available}</strong></span>
               </div>
-              <div className="flex-shrink-0 flex flex-wrap items-center gap-3 pb-3 text-xs">
+              <div className="flex-shrink-0 flex flex-wrap items-center gap-3 pb-3 text-xs items-center">
                 <span className="text-muted-foreground min-w-[80px]">
                   {searchTerm.trim()
                     ? `${searchMatches.length} result${searchMatches.length === 1 ? "" : "s"}`
@@ -2474,6 +2890,54 @@ export function JobApplicationsView() {
                     </option>
                   ))}
                 </select>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Resume style:</span>
+                  <select
+                    className="h-7 text-xs border border-input rounded px-2 bg-background"
+                    value={applicationModalFormatId}
+                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                      const id = e.target.value as FormatId;
+                      setApplicationModalFormatId(id);
+                      applicationModalFormatIdRef.current = id;
+                      try {
+                        localStorage.setItem(APPLICATION_MODAL_TEMPLATE_KEY, id);
+                      } catch {}
+                    }}
+                    aria-label="Resume style for bulk generation"
+                  >
+                    {FORMAT_LIST.map((f: { formatId: FormatId; name: string }) => (
+                      <option key={f.formatId} value={f.formatId}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="ml-auto flex items-center gap-2">
+                  {bulkGptRunning && (
+                    <span className="text-[11px] text-muted-foreground">
+                      Generating {bulkGptProgress.done}/{bulkGptProgress.total}
+                    </span>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={bulkGptRunning ? "destructive" : "outline"}
+                    className="h-7 px-2 text-[11px]"
+                    disabled={
+                      !aiPrompts || (!bulkGptRunning && bulkEligibleApps.length === 0)
+                    }
+                    onClick={handleBulkGptGenerate}
+                  >
+                    {bulkGptRunning ? (
+                      <>
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        Stop
+                      </>
+                    ) : (
+                      `Bulk generate (${bulkEligibleApps.length})`
+                    )}
+                  </Button>
+                </div>
               </div>
               {profileFilterId && dataRows.length === 0 && (
                 <div className="flex-shrink-0 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
@@ -2507,7 +2971,9 @@ export function JobApplicationsView() {
                           ["Company", "company"] as const,
                           ["Title", "title"] as const,
                           ["Job URL", "jobUrl"] as const,
+                          ["Job description", "jobDescription"] as const,
                           ["Resume file", "resume"] as const,
+                          ["Applied", "applied"] as const,
                         ] satisfies readonly [string, ColumnKey][]
                       ).map(([label, key], col) => (
                         <TableHead
@@ -2515,7 +2981,7 @@ export function JobApplicationsView() {
                           className={cn(
                             "border border-border bg-muted/80 backdrop-blur-[2px] px-2 py-0.5 font-medium shadow-[0_1px_0_0_hsl(var(--border))]",
                             col === 0 && "w-14 text-right tabular-nums text-muted-foreground",
-                            col === 5 && "text-center"
+                            (key === "resume" || key === "applied") && "text-center"
                           )}
                           style={{
                             width: columnWidths[key],
@@ -2548,6 +3014,8 @@ export function JobApplicationsView() {
                 onScroll={handleScroll}
                 onKeyDown={handleTableKeyDown}
                 onPaste={(e) => {
+                  // If we're editing a cell (inline input), let the browser handle paste normally.
+                  if (editingCell) return;
                   const startRow = selectedRange?.endRow ?? 1;
                   const startCol = selectedRange?.endCol ?? 0;
                   handleTablePaste(e, startRow - 1, startCol);
@@ -2774,21 +3242,69 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           data-row={row}
                           data-col={5}
                           className={cn(
-                            "border border-border px-2 py-0.5 text-center",
+                            "relative border border-border px-2 py-0.5",
                             getSelectionBorderClass(row, 5)
                           )}
-                          style={{ width: columnWidths.resume, minWidth: 56, maxWidth: 480 }}
+                          style={{ width: columnWidths.jobDescription, minWidth: 160, maxWidth: 480 }}
                           onMouseDown={(e: React.MouseEvent<HTMLTableCellElement>) => handleCellMouseDown(e, row, 5)}
+                          onDoubleClick={() =>
+                            startEdit(index, "jobDescription", app.job_description ?? "", app.id)
+                          }
+                        >
+                          {isEditing("jobDescription") ? (
+                            renderInput("jobDescription")
+                          ) : (
+                            <div className="flex items-center gap-1 min-w-0">
+                              <span className="flex-1 min-w-0">
+                                {renderCellDisplay(app.job_description ?? "")}
+                              </span>
+                              {(app.job_description ?? "").trim() ? (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center justify-center rounded hover:bg-sky-100 dark:hover:bg-sky-900/40 p-1 text-sky-500"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    setViewJobDescriptionId(app.id);
+                                  }}
+                                  title="View job description"
+                                >
+                                  <FileText className="h-4 w-4" />
+                                </button>
+                              ) : null}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell
+                          data-row={row}
+                          data-col={6}
+                          className={cn(
+                            "border border-border px-2 py-0.5 text-center",
+                            getSelectionBorderClass(row, 6)
+                          )}
+                          style={{ width: columnWidths.resume, minWidth: 56, maxWidth: 480 }}
+                          onMouseDown={(e: React.MouseEvent<HTMLTableCellElement>) => handleCellMouseDown(e, row, 6)}
                         >
                           {(() => {
+                            const isBulkProcessing = bulkInProgressIds.has(app.id);
                             const hasJobInfo = (app.company_name ?? "").trim() !== "" || (app.title ?? "").trim() !== "";
                             const alreadyApplied = Boolean(app.resume_file_name);
+                            if (isBulkProcessing) {
+                              return (
+                                <div className="inline-flex items-center justify-center gap-1 text-xs text-muted-foreground">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  <span>Generating…</span>
+                                </div>
+                              );
+                            }
                             if (alreadyApplied) {
                               return (
                                 <div className="inline-flex items-center gap-0.5">
                                   <button
                                     type="button"
-                                    className="inline-flex items-center justify-center rounded hover:bg-muted p-1"
+                                    className={cn(
+                                      "inline-flex items-center justify-center rounded p-1",
+                                      "hover:bg-muted"
+                                    )}
                                     draggable={true}
                                     onMouseEnter={() => {
                                       if (pdfBlobCacheRef.current.has(app.id)) return;
@@ -2865,7 +3381,10 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   </button>
                                   <button
                                     type="button"
-                                    className="inline-flex items-center justify-center rounded hover:bg-muted p-1"
+                                    className={cn(
+                                      "inline-flex items-center justify-center rounded p-1",
+                                      "hover:bg-muted"
+                                    )}
                                     onMouseEnter={() => {
                                       if (pdfBlobCacheRef.current.has(app.id)) return;
                                       fetch(`/api/job-applications/${app.id}/pdf`)
@@ -2877,31 +3396,68 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                     }}
                                     onClick={(ev) => {
                                       ev.stopPropagation();
-                                      if (typeof navigator.clipboard?.write !== "function") {
-                                        console.warn("Copy PDF: Clipboard API not available (use HTTPS or localhost).");
-                                        return;
-                                      }
                                       const blob = pdfBlobCacheRef.current.get(app.id);
-                                      if (blob) {
-                                        navigator.clipboard
-                                          .write([new ClipboardItem({ "application/pdf": blob })])
-                                          .then(() => {
+                                      const doCopy = async (b: Blob) => {
+                                        const baseName =
+                                          profileName(app.profile_id) ||
+                                          (app.company_name ?? "") ||
+                                          (app.title ?? "") ||
+                                          "Resume";
+                                        const safeBase = baseName
+                                          .replace(/[\\/:*?"<>|]/g, "_")
+                                          .trim()
+                                          .slice(0, 80) || "Resume";
+                                        const fileName = `${safeBase}.pdf`;
+                                        const api = (window as unknown as {
+                                          electron?: {
+                                            saveResumeToTemp?: (
+                                              buffer: ArrayBuffer,
+                                              name: string,
+                                              profileName: string
+                                            ) => Promise<string | null>;
+                                          };
+                                        }).electron;
+                                        try {
+                                          const buffer = await b.arrayBuffer();
+                                          let tempSaved = false;
+                                          if (api?.saveResumeToTemp) {
+                                            const result = await api.saveResumeToTemp(buffer, fileName, baseName);
+                                            tempSaved = !!result;
+                                          }
+
+                                          let clipboardCopied = false;
+                                          if (typeof navigator.clipboard?.write === "function") {
+                                            try {
+                                              await navigator.clipboard.write([
+                                                new ClipboardItem({ "application/pdf": b }),
+                                              ]);
+                                              clipboardCopied = true;
+                                            } catch (clipboardErr) {
+                                              console.error("Clipboard PDF write failed:", clipboardErr);
+                                            }
+                                          }
+
+                                          if (tempSaved || clipboardCopied) {
                                             setCopiedPdfId(app.id);
                                             setTimeout(() => setCopiedPdfId(null), 2000);
-                                          })
-                                          .catch((err) => console.error("Copy PDF to clipboard failed:", err));
+                                          }
+                                        } catch (err) {
+                                          console.error("Copy/save PDF failed:", err);
+                                        }
+                                      };
+                                      if (blob) {
+                                        void doCopy(blob);
                                         return;
                                       }
                                       fetch(`/api/job-applications/${app.id}/pdf`)
                                         .then((res) => (res.ok ? res.blob() : Promise.reject(new Error("Failed to fetch"))))
-                                        .then((blob) => navigator.clipboard.write([new ClipboardItem({ "application/pdf": blob })]))
-                                        .then(() => {
-                                          setCopiedPdfId(app.id);
-                                          setTimeout(() => setCopiedPdfId(null), 2000);
+                                        .then((b) => {
+                                          pdfBlobCacheRef.current.set(app.id, b);
+                                          return doCopy(b);
                                         })
-                                        .catch((err) => console.error("Copy PDF to clipboard failed:", err));
+                                        .catch((err) => console.error("Copy/save PDF failed:", err));
                                     }}
-                                    title={copiedPdfId === app.id ? "Copied!" : "Copy PDF to clipboard"}
+                                    title={copiedPdfId === app.id ? "Copied!" : "Copy PDF to clipboard and temp"}
                                   >
                                     {copiedPdfId === app.id ? (
                                       <Check className="h-4 w-4 text-green-600" />
@@ -2942,19 +3498,6 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   >
                                     <Download className="h-4 w-4" />
                                   </button>
-                                  {(app as JobApplication).job_description?.trim() ? (
-                                    <button
-                                      type="button"
-                                      className="inline-flex items-center justify-center rounded hover:bg-sky-100 dark:hover:bg-sky-900/40 p-1 text-sky-500"
-                                      onClick={(ev) => {
-                                        ev.stopPropagation();
-                                        setViewJobDescriptionId(app.id);
-                                      }}
-                                      title="View job description"
-                                    >
-                                      <FileText className="h-4 w-4" />
-                                    </button>
-                                  ) : null}
                                   {gptChatUrls[app.id] ? (
                                     <button
                                       type="button"
@@ -3016,6 +3559,76 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                             return "";
                           })()}
                         </TableCell>
+                        <TableCell
+                          data-row={row}
+                          data-col={7}
+                          className={cn(
+                            "border border-border px-2 py-0.5 text-center",
+                            getSelectionBorderClass(row, 7)
+                          )}
+                          style={{ width: columnWidths.applied, minWidth: 56, maxWidth: 120 }}
+                          onMouseDown={(e: React.MouseEvent<HTMLTableCellElement>) => handleCellMouseDown(e, row, 7)}
+                        >
+                          {(() => {
+                            const hasResume = Boolean(app.resume_file_name);
+                            const hasJd = Boolean((app.job_description ?? "").trim());
+                            const canApply = hasResume && hasJd;
+                            const isApplied = Boolean(app.applied_manually);
+                            return (
+                              <input
+                                type="checkbox"
+                                className="h-3 w-3"
+                                checked={isApplied}
+                                disabled={!canApply && !isApplied}
+                                onChange={async (ev) => {
+                                  ev.stopPropagation();
+                                  if (isApplied) {
+                                    const ok = window.confirm(
+                                      "Mark this application as not applied?"
+                                    );
+                                    if (!ok) return;
+                                    try {
+                                      const res = await fetch(`/api/job-applications/${app.id}`, {
+                                        method: "PATCH",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          applied_manually: false,
+                                        }),
+                                      });
+                                      if (!res.ok) return;
+                                      const updated = (await res.json()) as JobApplication;
+                                      setApplications((prev) =>
+                                        prev.map((a) => (a.id === app.id ? updated : a))
+                                      );
+                                    } catch (e) {
+                                      console.error("Failed to mark not applied:", e);
+                                    }
+                                    return;
+                                  }
+                                  if (!canApply) return;
+                                  const today = new Date().toISOString().slice(0, 10);
+                                  try {
+                                    const res = await fetch(`/api/job-applications/${app.id}`, {
+                                      method: "PATCH",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({
+                                        applied_manually: true,
+                                        date: today,
+                                      }),
+                                    });
+                                    if (!res.ok) return;
+                                    const updated = (await res.json()) as JobApplication;
+                                    setApplications((prev) =>
+                                      prev.map((a) => (a.id === app.id ? updated : a))
+                                    );
+                                  } catch (e) {
+                                    console.error("Failed to mark applied:", e);
+                                  }
+                                }}
+                              />
+                            );
+                          })()}
+                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -3035,7 +3648,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                         >
                           {dataRows.length + i + 1}
                         </TableCell>
-                        {[1, 2, 3, 4, 5].map((col) => {
+                        {[1, 2, 3, 4, 5, 6, 7].map((col) => {
                           const colKey: ColumnKey | null =
                             col === 1
                               ? "date"
@@ -3046,7 +3659,11 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                               : col === 4
                               ? "jobUrl"
                               : col === 5
+                              ? "jobDescription"
+                              : col === 6
                               ? "resume"
+                              : col === 7
+                              ? "applied"
                               : null;
                           const isEditableCol = colKey != null && EDITABLE_COLUMNS.includes(colKey);
                           return (
@@ -3480,11 +4097,52 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                         if (!aiPrompts) return;
                         setAiPipelineRunning(true);
                         setHighlightTarget(null);
+                        setRoleContext(null);
+                        setChatMessages([]);
                         try {
+                          // Step 0: extract core role context from JD (API flow, in-memory only)
+                          let extractedContext = "";
+                          try {
+                            const res0 = await fetch("/api/ai/generate", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                apiKey: key,
+                                mode: "extractCoreContext",
+                                jobDescription: jd,
+                                currentCompany: currentCompanyName,
+                                lastCompany: lastCompanyName,
+                              }),
+                            });
+                            if (res0.ok) {
+                              const json0 = (await res0.json()) as { text?: string };
+                              extractedContext = (json0.text ?? "").trim();
+                            }
+                          } catch (e) {
+                            console.error("AI extractCoreContext error (desktop API):", e);
+                          }
+                          if (!extractedContext) {
+                            setAiPipelineRunning(false);
+                            return;
+                          }
+                          setRoleContext(extractedContext);
+                          setChatMessages([
+                            {
+                              role: "assistant",
+                              content: extractedContext,
+                            },
+                          ]);
+
                           // Step 1: current company bullets
                           setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 1: true }));
                           let currentBullets = "";
                           try {
+                            const history1 = [
+                              {
+                                role: "assistant" as const,
+                                content: extractedContext,
+                              },
+                            ];
                             const res1 = await fetch("/api/ai/generate", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -3495,6 +4153,8 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 currentCompany: currentCompanyName,
                                 lastCompany: lastCompanyName,
                                 prompts: aiPrompts,
+                                roleContext: extractedContext,
+                                messages: history1,
                               }),
                             });
                               if (res1.ok) {
@@ -3509,6 +4169,10 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   });
                                   setModalContentVersion((v) => v + 1);
                                   schedulePdfRefreshRef.current();
+                                  setChatMessages((prev) => [
+                                    ...prev,
+                                    { role: "assistant", content: currentBullets },
+                                  ]);
                                 }
                               }
                           } finally {
@@ -3520,6 +4184,15 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           let lastBullets = "";
                           try {
                             if (lastCompanyName) {
+                              const history2 = [
+                                {
+                                  role: "assistant" as const,
+                                  content: extractedContext,
+                                },
+                                ...(currentBullets
+                                  ? [{ role: "assistant" as const, content: currentBullets }]
+                                  : []),
+                              ];
                               const res2 = await fetch("/api/ai/generate", {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
@@ -3530,6 +4203,8 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   currentCompany: currentCompanyName,
                                   lastCompany: lastCompanyName,
                                   prompts: aiPrompts,
+                                  roleContext: extractedContext,
+                                  messages: history2,
                                 }),
                               });
                               if (res2.ok) {
@@ -3544,6 +4219,10 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   });
                                   setModalContentVersion((v) => v + 1);
                                   schedulePdfRefreshRef.current();
+                                  setChatMessages((prev) => [
+                                    ...prev,
+                                    { role: "assistant", content: lastBullets },
+                                  ]);
                                 }
                               }
                             }
@@ -3554,6 +4233,18 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           // Step 3: summary
                           setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 3: true }));
                           try {
+                            const history3 = [
+                              {
+                                role: "assistant" as const,
+                                content: extractedContext,
+                              },
+                              ...(currentBullets
+                                ? [{ role: "assistant" as const, content: currentBullets }]
+                                : []),
+                              ...(lastBullets
+                                ? [{ role: "assistant" as const, content: lastBullets }]
+                                : []),
+                            ];
                             const res3 = await fetch("/api/ai/generate", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -3565,6 +4256,8 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 lastCompany: lastCompanyName,
                                 prompts: aiPrompts,
                                 generatedBullets: { current: currentBullets, last: lastBullets },
+                                roleContext: extractedContext,
+                                messages: history3,
                               }),
                             });
                             if (res3.ok) {
@@ -3589,6 +4282,18 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           // Step 4: skills
                           setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 4: true }));
                           try {
+                            const history4 = [
+                              {
+                                role: "assistant" as const,
+                                content: extractedContext,
+                              },
+                              ...(currentBullets
+                                ? [{ role: "assistant" as const, content: currentBullets }]
+                                : []),
+                              ...(lastBullets
+                                ? [{ role: "assistant" as const, content: lastBullets }]
+                                : []),
+                            ];
                             const res4 = await fetch("/api/ai/generate", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -3600,6 +4305,8 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 lastCompany: lastCompanyName,
                                 prompts: aiPrompts,
                                 generatedBullets: { current: currentBullets, last: lastBullets },
+                                roleContext: extractedContext,
+                                messages: history4,
                               }),
                             });
                             if (res4.ok) {
@@ -3647,11 +4354,20 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                         };
                         setGptPipelineRunning(true);
                         setHighlightTarget(null);
+                        // Extract core context using GPT webview only (no API call).
+                        const extractionPrompt = buildExtractionPromptForGpt(jd);
+                        const extractedContext = extractionPrompt
+                          ? (await runGptStepInWebview(extractionPrompt))?.trim() ?? ""
+                          : "";
+                        if (!extractedContext) {
+                          setGptPipelineRunning(false);
+                          return;
+                        }
                         let currentBullets = "";
                         let lastBullets = "";
                         try {
                           // Step 1: current company bullets
-                          const prompt1 = buildFullPromptForGptStep(1, aiPrompts, params);
+                          const prompt1 = buildFullPromptForGptStep(1, aiPrompts, params, undefined, extractedContext);
                           const result1 = await runGptStepInWebview(prompt1);
                           if (!result1?.trim()) {
                             setGptPipelineRunning(false);
@@ -3669,7 +4385,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
 
                           // Step 2: last company bullets
                           if (lastCompanyName) {
-                            const prompt2 = buildFullPromptForGptStep(2, aiPrompts, params);
+                            const prompt2 = buildFullPromptForGptStep(2, aiPrompts, params, undefined, extractedContext);
                             const result2 = await runGptStepInWebview(prompt2);
                             if (!result2?.trim()) {
                               setGptPipelineRunning(false);
@@ -3687,10 +4403,16 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           }
 
                           // Step 3: summary
-                          const prompt3 = buildFullPromptForGptStep(3, aiPrompts, params, {
-                            current: currentBullets,
-                            last: lastBullets,
-                          });
+                          const prompt3 = buildFullPromptForGptStep(
+                            3,
+                            aiPrompts,
+                            params,
+                            {
+                              current: currentBullets,
+                              last: lastBullets,
+                            },
+                            extractedContext
+                          );
                           const result3 = await runGptStepInWebview(prompt3);
                           if (!result3?.trim()) {
                             setGptPipelineRunning(false);
@@ -3705,10 +4427,16 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           schedulePdfRefreshRef.current();
 
                           // Step 4: skills
-                          const prompt4 = buildFullPromptForGptStep(4, aiPrompts, params, {
-                            current: currentBullets,
-                            last: lastBullets,
-                          });
+                          const prompt4 = buildFullPromptForGptStep(
+                            4,
+                            aiPrompts,
+                            params,
+                            {
+                              current: currentBullets,
+                              last: lastBullets,
+                            },
+                            extractedContext
+                          );
                           const result4 = await runGptStepInWebview(prompt4);
                           if (!result4?.trim()) {
                             setGptPipelineRunning(false);

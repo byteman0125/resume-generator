@@ -7,6 +7,9 @@ export interface JobApplication {
   profile_id: string | null;
   resume_file_name: string;
   job_description?: string;
+  /** 0 = not applied, 1 = applied */
+  applied_manually?: number;
+  gpt_chat_url?: string | null;
   created_at: string;
 }
 

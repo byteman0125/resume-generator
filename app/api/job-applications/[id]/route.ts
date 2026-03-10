@@ -54,6 +54,8 @@ export async function PATCH(
       profile_id?: string | null;
       resume_file_name?: string | null;
       job_description?: string | null;
+      applied_manually?: number | boolean;
+      gpt_chat_url?: string | null;
     } = {};
     if (typeof body.date === "string") updates.date = body.date.trim();
     if (typeof body.company_name === "string")
@@ -70,6 +72,15 @@ export async function PATCH(
     if ("job_description" in body)
       updates.job_description =
         typeof body.job_description === "string" ? body.job_description : "";
+    if ("applied_manually" in body) {
+      if (typeof body.applied_manually === "boolean" || typeof body.applied_manually === "number") {
+        updates.applied_manually = body.applied_manually;
+      }
+    }
+    if ("gpt_chat_url" in body) {
+      updates.gpt_chat_url =
+        typeof body.gpt_chat_url === "string" ? body.gpt_chat_url.trim() || null : null;
+    }
     updateJobApplication(id, updates);
     const row = getJobApplication(id)!;
     return NextResponse.json(row);

@@ -1,7 +1,5 @@
-"use client";
-
-import { JobApplicationsView } from "@/components/job-applications-view";
+import { redirect } from "next/navigation";
 
 export default function ApplicationsPage() {
-  return <JobApplicationsView />;
+  redirect("/profile");
 }

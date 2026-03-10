@@ -14,12 +14,12 @@ export function AppHeader() {
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="container mx-auto flex h-14 items-center px-4">
-          {/* Brand -> goes to / (Job applications) */}
+          {/* Brand -> goes to / (Profile home) */}
           <Link
             href="/"
             className={cn(
               "mr-6 flex items-center gap-2 font-semibold transition-colors hover:text-primary",
-              (pathname === "/" || pathname === "/applications") ? "text-foreground" : "text-muted-foreground"
+              pathname === "/" ? "text-foreground" : "text-muted-foreground"
             )}
           >
             <Briefcase className="h-5 w-5" />
@@ -63,18 +63,6 @@ export function AppHeader() {
             >
               <Sparkles className="h-4 w-4" />
               AI
-            </Link>
-            <Link
-              href="/applications"
-              className={cn(
-                "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                pathname === "/applications"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-            >
-              <Briefcase className="h-4 w-4" />
-              Job applications
             </Link>
           </div>
 

@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ResumeProvider } from "@/lib/resume-context";
 import { ConditionalShell } from "@/components/conditional-shell";
 import { AppShell } from "@/components/app-shell";
+import { ShellErrorBoundary } from "@/components/shell-error-boundary";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -39,7 +40,9 @@ export default function RootLayout({
           />
           <ResumeProvider>
             <Suspense fallback={<AppShell>{children}</AppShell>}>
-              <ConditionalShell>{children}</ConditionalShell>
+              <ShellErrorBoundary>
+                <ConditionalShell>{children}</ConditionalShell>
+              </ShellErrorBoundary>
             </Suspense>
           </ResumeProvider>
         </ThemeProvider>

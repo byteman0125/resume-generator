@@ -39,6 +39,12 @@ export async function POST(request: Request) {
       typeof body.resume_file_name === "string" ? body.resume_file_name.trim() : null;
     const job_description =
       typeof body.job_description === "string" ? body.job_description : "";
+    const applied_manually =
+      typeof body.applied_manually === "boolean" || typeof body.applied_manually === "number"
+        ? body.applied_manually
+        : 0;
+    const gpt_chat_url =
+      typeof body.gpt_chat_url === "string" ? body.gpt_chat_url.trim() || null : null;
     const row = createJobApplication({
       date,
       company_name,
@@ -47,6 +53,8 @@ export async function POST(request: Request) {
       profile_id,
       resume_file_name,
       job_description,
+      applied_manually,
+      gpt_chat_url,
     });
     return NextResponse.json(row);
   } catch (e) {

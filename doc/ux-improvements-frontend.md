@@ -22,7 +22,7 @@ Summary of improvements and further ideas for the job-applications view and app.
 - **Delete (single row):** "Row deleted" on success; "Delete failed" on error.
 - **Delete (selected rows):** "Deleted N row(s)" on success; "Delete failed" if any request fails or on throw.
 
-Applied in both **web** (`components/job-applications-view.tsx`) and **desktop** (desktop uses the same Next.js app in a BrowserView, so the same layout and toasts apply).
+These improvements now apply to the **desktop** job applications view (`desktop/src/components/job-applications-view.tsx`). The Next.js web app no longer exposes a job applications table; job management is desktop-only.
 
 ---
 

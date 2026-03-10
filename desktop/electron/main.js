@@ -68,6 +68,10 @@ function createWindow() {
   win.loadURL("app://./index.html");
 
   win.once("ready-to-show", () => {
+    // Always start in maximized (full) window mode.
+    try {
+      win.maximize();
+    } catch (_) {}
     win.show();
     win.focus();
   });
@@ -87,6 +91,11 @@ function createWindow() {
 
 function showMainWindow() {
   if (mainWindow) {
+    try {
+      if (!mainWindow.isMaximized()) {
+        mainWindow.maximize();
+      }
+    } catch (_) {}
     mainWindow.show();
     mainWindow.focus();
   } else {
@@ -180,5 +189,32 @@ ipcMain.on("resume-drag", (event, { buffer, fileName, appId }) => {
     }, 300000);
   } catch (err) {
     console.error("Resume drag failed:", err);
+  }
+});
+
+// Save resume PDF to a stable temp location so the user can access it from the filesystem.
+// We keep one file per profile name (overwritten on each copy) to avoid clutter.
+const RESUME_COPY_TEMP_BASE = path.join(os.tmpdir(), "resume-builder-copy");
+
+ipcMain.handle("save-resume-temp", async (event, { buffer, fileName, profileName }) => {
+  try {
+    const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    const baseName =
+      (profileName || "").toString().trim() ||
+      (fileName || "").toString().trim() ||
+      "Resume";
+    const safeBase = baseName.replace(/[<>:"/\\|?*]/g, "_").slice(0, 150) || "Resume";
+    const finalName =
+      ((fileName || "").toString().trim() &&
+        (fileName || "").toString().trim().replace(/[<>:"/\\|?*]/g, "_").slice(0, 200)) ||
+      `${safeBase}.pdf`;
+    const dir = RESUME_COPY_TEMP_BASE;
+    const filePath = path.join(dir, finalName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath, buf);
+    return filePath;
+  } catch (err) {
+    console.error("Failed to save resume to temp:", err);
+    return null;
   }
 });
