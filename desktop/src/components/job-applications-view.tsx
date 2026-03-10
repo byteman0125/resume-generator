@@ -1666,6 +1666,7 @@ export function JobApplicationsView() {
             job_url: form.job_url.trim() || null,
             profile_id: form.profile_id || null,
             job_description: form.job_description?.trim() ?? "",
+            applied_manually: true,
           }),
         });
         if (res.ok) {

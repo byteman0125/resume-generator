@@ -57,31 +57,6 @@ CREATE TABLE IF NOT EXISTS job_links (
 );
 `);
 
-// Best-effort migration for existing databases: add new columns if missing and backfill applied_manually.
-try {
-  db.exec("ALTER TABLE job_applications ADD COLUMN applied_manually INTEGER NOT NULL DEFAULT 0;");
-} catch (e) {
-  if (!(e instanceof Error) || !/duplicate column/i.test(e.message)) {
-    throw e;
-  }
-}
-
-try {
-  db.exec("ALTER TABLE job_applications ADD COLUMN gpt_chat_url TEXT;");
-} catch (e) {
-  if (!(e instanceof Error) || !/duplicate column/i.test(e.message)) {
-    throw e;
-  }
-}
-
-try {
-  db.exec(
-    "UPDATE job_applications SET applied_manually = 1 WHERE applied_manually = 0 AND resume_file_name IS NOT NULL AND TRIM(resume_file_name) != '';"
-  );
-} catch {
-  // Ignore backfill failures; they don't affect schema correctness.
-}
-
 function genId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
