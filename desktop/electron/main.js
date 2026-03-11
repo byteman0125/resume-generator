@@ -71,12 +71,6 @@ function createWindow() {
   win.loadURL("app://./index.html");
 
   win.once("ready-to-show", () => {
-    // In development, open DevTools so renderer logs (e.g. [ResumeCopy]) are visible.
-    if (!app.isPackaged) {
-      try {
-        win.webContents.openDevTools();
-      } catch (_) {}
-    }
     // Always start in maximized (full) window mode.
     try {
       win.maximize();
@@ -126,7 +120,6 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
-  console.log("[ResumeCopy] Main process ready. When you click Copy (resume cell), logs will appear here.");
   protocol.handle("app", (request) => {
     const requestUrl = request.url;
     let pathname = requestUrl.replace(/^app:\/\//, "").replace(/\?.*$/, "").replace(/#.*$/, "");
