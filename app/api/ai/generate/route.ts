@@ -22,6 +22,8 @@ interface GenerateRequestBody {
   jobDescription: string;
   currentCompany: string;
   lastCompany: string;
+  /** Current company's role/title (e.g. from first experience). Available as {{role}} in prompts. */
+  currentRole?: string | null;
   // Prompts are required for bullets/summary/skills but not for extractCoreContext.
   prompts?: Prompts;
   // Optional snapshot of the current resume, kept generic to avoid tight coupling.
@@ -42,6 +44,29 @@ function fill(template: string, replacements: Record<string, string>): string {
   return result;
 }
 
+/** Replaces {{job_description}} only on first occurrence with value; further occurrences become a short reference to avoid duplicating role context. */
+function fillWithJobDescriptionOnce(
+  template: string,
+  replacements: Record<string, string>,
+  jobDescriptionValue: string,
+  subsequentPlaceholder: string = "[See role context above.]"
+): string {
+  const jobDescToken = "{{job_description}}";
+  if (!template.includes(jobDescToken)) return fill(template, replacements);
+  const firstIdx = template.indexOf(jobDescToken);
+  const head = template.slice(0, firstIdx) + jobDescriptionValue + template.slice(firstIdx + jobDescToken.length);
+  const rest = head.split(jobDescToken).join(subsequentPlaceholder);
+  const others: Record<string, string> = { ...replacements, job_description: "" };
+  let result = rest;
+  for (const [key, value] of Object.entries(others)) {
+    if (key === "job_description") continue;
+    const token = `{{${key}}}`;
+    if (!token || !result.includes(token)) continue;
+    result = result.split(token).join(value);
+  }
+  return result;
+}
+
 function buildPrompt(
   body: GenerateRequestBody,
   generatedBullets?: { current: string; last: string }
@@ -49,28 +74,41 @@ function buildPrompt(
   const jd = (body.jobDescription ?? "").trim();
   const currentCompany = (body.currentCompany ?? "").trim();
   const lastCompany = (body.lastCompany ?? "").trim();
+  const currentRole = (body.currentRole ?? "").trim();
   const prompts = body.prompts;
   const roleContext = (body.roleContext ?? "").trim();
-  const prefix = roleContext ? `Role context (use to tailor):\n${roleContext}\n\n` : "";
+  const prefix = roleContext ? `Job description (use to tailor):\n${roleContext}\n\n` : "";
+  const tokens = { company: currentCompany, job_description: roleContext || "", role: currentRole };
 
   if (body.mode === "bulletsCurrent") {
     const base = (prompts?.bulletsCurrent ?? "").trim();
     if (!base) return { prompt: "", error: "Bullet prompt (current company) is required" };
-    const withTokens = fill(base, { company: currentCompany, job_description: roleContext || "" });
-    return { prompt: prefix + withTokens };
+    const withTokens = fillWithJobDescriptionOnce(
+      base,
+      tokens,
+      roleContext || "",
+      "[See role context above.]"
+    );
+    return { prompt: withTokens };
   }
 
   if (body.mode === "bulletsLast") {
     const base = (prompts?.bulletsLast ?? "").trim();
     if (!base) return { prompt: "", error: "Bullet prompt (last company) is required" };
-    const withTokens = fill(base, { company: lastCompany, job_description: roleContext || "" });
-    return { prompt: prefix + withTokens };
+    const lastTokens = { ...tokens, company: lastCompany };
+    const withTokens = fillWithJobDescriptionOnce(
+      base,
+      lastTokens,
+      roleContext || "",
+      "[See role context above.]"
+    );
+    return { prompt: withTokens };
   }
 
   if (body.mode === "summary") {
     const base = (prompts?.summary ?? "").trim();
     if (!base) return { prompt: "", error: "Summary prompt is required" };
-    const injected = fill(base, { company: currentCompany, job_description: jd });
+    const injected = fill(base, { company: currentCompany, job_description: jd, role: currentRole });
     const bulletsText = `${generatedBullets?.current ?? ""}\n\n${generatedBullets?.last ?? ""}`.trim();
     const prompt = bulletsText
       ? `${injected}\n\nHere are the experience bullets to base the summary on:\n\n${bulletsText}`
@@ -81,7 +119,7 @@ function buildPrompt(
   // skills
   const base = (prompts?.skills ?? "").trim();
   if (!base) return { prompt: "", error: "Skills prompt is required" };
-  const injected = fill(base, { company: currentCompany, job_description: jd });
+  const injected = fill(base, { company: currentCompany, job_description: jd, role: currentRole });
   const bulletsText = `${generatedBullets?.current ?? ""}\n\n${generatedBullets?.last ?? ""}`.trim();
   const prompt = bulletsText
     ? `${injected}\n\nHere are the experience bullets to extract skills from:\n\n${bulletsText}`

@@ -130,10 +130,31 @@ function fillPromptTemplate(template: string, replacements: Record<string, strin
   return result;
 }
 
+/** Replaces {{job_description}} only on first occurrence; further occurrences become "[See role context above.]" to avoid duplicating role context. */
+function fillPromptTemplateWithJobDescriptionOnce(
+  template: string,
+  replacements: Record<string, string>,
+  subsequentPlaceholder: string = "[See role context above.]"
+): string {
+  const jobDescToken = "{{job_description}}";
+  const value = replacements.job_description ?? "";
+  if (!template.includes(jobDescToken)) return fillPromptTemplate(template, replacements);
+  const firstIdx = template.indexOf(jobDescToken);
+  let result =
+    template.slice(0, firstIdx) + value + template.slice(firstIdx + jobDescToken.length);
+  result = result.split(jobDescToken).join(subsequentPlaceholder);
+  const { job_description: _, ...rest } = replacements;
+  for (const [key, val] of Object.entries(rest)) {
+    const token = `{{${key}}}`;
+    if (result.includes(token)) result = result.split(token).join(val);
+  }
+  return result;
+}
+
 function buildPromptForButton(
   id: PromptId,
   prompts: AiPrompts | null,
-  params: { currentCompany: string; lastCompany: string; jobDescription: string; roleContext?: string | null }
+  params: { currentCompany: string; lastCompany: string; jobDescription: string; roleContext?: string | null; currentRole?: string | null }
 ): string {
   const base = (() => {
     switch (id) {
@@ -155,22 +176,26 @@ function buildPromptForButton(
   const lastCompany = params.lastCompany?.trim() ?? "";
   const jobDescription = params.jobDescription ?? "";
   const roleContext = (params.roleContext ?? "").trim();
+  const currentRole = (params.currentRole ?? "").trim();
 
   if (id === 1) {
-    return fillPromptTemplate(base, {
+    return fillPromptTemplateWithJobDescriptionOnce(base, {
       company: currentCompany,
       job_description: roleContext || "",
+      role: currentRole,
     });
   }
   if (id === 2) {
-    return fillPromptTemplate(base, {
+    return fillPromptTemplateWithJobDescriptionOnce(base, {
       company: lastCompany,
       job_description: roleContext || "",
+      role: currentRole,
     });
   }
   return fillPromptTemplate(base, {
     company: currentCompany,
     job_description: jobDescription,
+    role: currentRole,
   });
 }
 
@@ -190,17 +215,17 @@ function buildExtractionPromptForGpt(jobDescription: string): string {
 function buildFullPromptForGptStep(
   stepId: PromptId,
   prompts: AiPrompts | null,
-  params: { currentCompany: string; lastCompany: string; jobDescription: string },
+  params: { currentCompany: string; lastCompany: string; jobDescription: string; currentRole?: string | null },
   generatedBullets?: { current: string; last: string },
   roleContext?: string | null
 ): string {
   const paramsWithRole = { ...params, roleContext: roleContext ?? undefined };
   const baseCorePrompt = buildPromptForButton(stepId, prompts, paramsWithRole);
   const prefix = roleContext && roleContext.trim()
-    ? `Role context (use to tailor):\n${roleContext.trim()}\n\n`
+    ? `Job description (use to tailor):\n${roleContext.trim()}\n\n`
     : "";
   const basePrompt = prefix + baseCorePrompt;
-  if (stepId === 1 || stepId === 2) return basePrompt;
+  if (stepId === 1 || stepId === 2) return baseCorePrompt;
   const bulletsText = [generatedBullets?.current ?? "", generatedBullets?.last ?? ""]
     .map((s) => s.trim())
     .filter(Boolean)
@@ -865,10 +890,12 @@ export function JobApplicationsView() {
 
       const exps = resume.experience ?? [];
       const currentCompanyName = exps[0]?.company?.trim() || app.company_name.trim();
+      const currentRole = exps[0]?.role?.trim() ?? "";
       const params = {
         currentCompany: currentCompanyName,
         lastCompany: "", // set per non-current experience
         jobDescription: jd,
+        currentRole,
       };
 
       if (bulkCancelRef.current) return null;
@@ -4117,6 +4144,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                         const expList = (modalResumeData ?? defaultResumeData).experience ?? [];
                         const currentCompanyName =
                           expList[0]?.company?.trim() || form.company_name.trim();
+                        const currentRole = expList[0]?.role?.trim() ?? form.title?.trim() ?? "";
                         const key =
                           typeof window !== "undefined"
                             ? window.localStorage.getItem("resume-builder-ai-api-key") || ""
@@ -4139,6 +4167,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 jobDescription: jd,
                                 currentCompany: currentCompanyName,
                                 lastCompany: "",
+                                currentRole,
                               }),
                             });
                             if (res0.ok) {
@@ -4186,6 +4215,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   jobDescription: jd,
                                   currentCompany: currentCompanyName,
                                   lastCompany: "",
+                                  currentRole,
                                   prompts: aiPrompts,
                                   roleContext: extractedContext,
                                   messages: history1,
@@ -4253,6 +4283,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                     jobDescription: jd,
                                     currentCompany: currentCompanyName,
                                     lastCompany: lastCompanyName,
+                                    currentRole,
                                     prompts: aiPrompts,
                                     roleContext: extractedContext,
                                     messages: history2,
@@ -4309,6 +4340,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 jobDescription: jd,
                                 currentCompany: currentCompanyName,
                                 lastCompany: "",
+                                currentRole,
                                 prompts: aiPrompts,
                                 generatedBullets: { current: currentBullets, last: lastBullets },
                                 roleContext: extractedContext,
@@ -4358,6 +4390,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 jobDescription: jd,
                                 currentCompany: currentCompanyName,
                                 lastCompany: "",
+                                currentRole,
                                 prompts: aiPrompts,
                                 generatedBullets: { current: currentBullets, last: lastBullets },
                                 roleContext: extractedContext,
@@ -4400,10 +4433,12 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                         const expList = (modalResumeData ?? defaultResumeData).experience ?? [];
                         const currentCompanyName =
                           expList[0]?.company?.trim() || form.company_name.trim();
+                        const currentRole = expList[0]?.role?.trim() ?? form.title?.trim() ?? "";
                         const params = {
                           currentCompany: currentCompanyName,
                           lastCompany: "",
                           jobDescription: jd,
+                          currentRole,
                         };
                         setGptPipelineRunning(true);
                         setHighlightTarget(null);
@@ -4589,6 +4624,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           const currentCompanyName =
                             firstExp?.company?.trim() || form.company_name.trim();
                           const lastCompanyName = secondExp?.company?.trim() || "";
+                          const currentRole = firstExp?.role?.trim() ?? form.title?.trim() ?? "";
                           const jobDesc = form.job_description.trim();
                       return (
                         <button
@@ -4604,6 +4640,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 lastCompany: lastCompanyName,
                                 jobDescription: jobDesc,
                                 roleContext: roleContext ?? undefined,
+                                currentRole,
                               });
                               if (!promptText) return;
                               await writeTextToClipboard(promptText);
