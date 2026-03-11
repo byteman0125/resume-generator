@@ -7,6 +7,10 @@ export interface Experience {
   endDate: string;
   current: boolean;
   description: string;
+  /** When true, use staticBulletContent for this role in application modal / PDF. */
+  useStaticBullets?: boolean;
+  /** Static bullet text for this role (supports **bold**). Used when useStaticBullets is true. */
+  staticBulletContent?: string;
 }
 
 export interface Education {

@@ -17,6 +17,28 @@ import { US_STATES, type CitiesByState } from "@/lib/usa-locations";
 import { cn } from "@/lib/utils";
 import { Plus, Trash2, GripVertical } from "lucide-react";
 
+/** Convert pasted HTML bold (<b>, <strong>) to ** for use in static bullet content. */
+function htmlToBoldMarkdown(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const fullText = (div.textContent ?? "").trim();
+  const fullLen = fullText.length;
+  function visit(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const el = node as HTMLElement;
+    const tag = el.tagName?.toLowerCase();
+    const inner = Array.from(node.childNodes).map(visit).join("");
+    if (tag === "b" || tag === "strong") {
+      const innerTrim = inner.trim();
+      if (fullLen > 0 && innerTrim.length >= fullLen * 0.9) return inner;
+      return "**" + inner + "**";
+    }
+    return inner;
+  }
+  return Array.from(div.childNodes).map(visit).join("");
+}
+
 export type FormSection = "profile" | "experience" | "education" | "skills";
 
 interface ProfileFormProps {
@@ -423,6 +445,48 @@ export function ProfileForm({ data, onChange, sections }: ProfileFormProps) {
                         Current
                       </label>
                     </div>
+                  </div>
+                  <div className="space-y-2 pt-2 border-t border-border mt-2">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!exp.useStaticBullets}
+                        onChange={(e) =>
+                          updateExperience(exp.id, { useStaticBullets: e.target.checked })
+                        }
+                      />
+                      Use static bullet content for this role
+                    </label>
+                    {exp.useStaticBullets && (
+                      <textarea
+                        value={exp.staticBulletContent ?? ""}
+                        onChange={(e) =>
+                          updateExperience(exp.id, { staticBulletContent: e.target.value })
+                        }
+                        onPaste={(e) => {
+                          const html = e.clipboardData.getData("text/html");
+                          if (html?.trim()) {
+                            e.preventDefault();
+                            const converted = htmlToBoldMarkdown(html);
+                            const ta = e.currentTarget;
+                            const start = ta.selectionStart;
+                            const end = ta.selectionEnd;
+                            const next =
+                              (exp.staticBulletContent ?? "").slice(0, start) +
+                              converted +
+                              (exp.staticBulletContent ?? "").slice(end);
+                            updateExperience(exp.id, { staticBulletContent: next });
+                          }
+                        }}
+                        placeholder="Paste or type bullets (one per line). Use **text** for bold."
+                        rows={4}
+                        className={cn(
+                          "flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background",
+                          "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                          "resize-y min-h-[80px]"
+                        )}
+                      />
+                    )}
                   </div>
                 </CardContent>
               </Card>

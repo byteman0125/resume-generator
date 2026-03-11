@@ -56,14 +56,14 @@ function buildPrompt(
   if (body.mode === "bulletsCurrent") {
     const base = (prompts?.bulletsCurrent ?? "").trim();
     if (!base) return { prompt: "", error: "Bullet prompt (current company) is required" };
-    const withTokens = fill(base, { company: currentCompany, job_description: jd });
+    const withTokens = fill(base, { company: currentCompany, job_description: roleContext || "" });
     return { prompt: prefix + withTokens };
   }
 
   if (body.mode === "bulletsLast") {
     const base = (prompts?.bulletsLast ?? "").trim();
     if (!base) return { prompt: "", error: "Bullet prompt (last company) is required" };
-    const withTokens = fill(base, { company: lastCompany });
+    const withTokens = fill(base, { company: lastCompany, job_description: roleContext || "" });
     return { prompt: prefix + withTokens };
   }
 

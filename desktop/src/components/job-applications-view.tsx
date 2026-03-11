@@ -133,7 +133,7 @@ function fillPromptTemplate(template: string, replacements: Record<string, strin
 function buildPromptForButton(
   id: PromptId,
   prompts: AiPrompts | null,
-  params: { currentCompany: string; lastCompany: string; jobDescription: string }
+  params: { currentCompany: string; lastCompany: string; jobDescription: string; roleContext?: string | null }
 ): string {
   const base = (() => {
     switch (id) {
@@ -154,21 +154,20 @@ function buildPromptForButton(
   const currentCompany = params.currentCompany?.trim() ?? "";
   const lastCompany = params.lastCompany?.trim() ?? "";
   const jobDescription = params.jobDescription ?? "";
+  const roleContext = (params.roleContext ?? "").trim();
 
   if (id === 1) {
-    // Current company bullets: use first company + job description.
     return fillPromptTemplate(base, {
       company: currentCompany,
-      job_description: jobDescription,
+      job_description: roleContext || "",
     });
   }
   if (id === 2) {
-    // Last company bullets: use second company only.
     return fillPromptTemplate(base, {
       company: lastCompany,
+      job_description: roleContext || "",
     });
   }
-  // Summary/skills-related prompts: allow both company and job description if tokens exist.
   return fillPromptTemplate(base, {
     company: currentCompany,
     job_description: jobDescription,
@@ -187,7 +186,7 @@ function buildExtractionPromptForGpt(jobDescription: string): string {
   );
 }
 
-/** Build full prompt for GPT/DeepSeek webview flow. Steps 3 and 4 include bullets when provided. */
+/** Build full prompt for GPT/DeepSeek webview flow. Steps 1–2 use only role context (no full JD). Steps 3 and 4 include bullets when provided. */
 function buildFullPromptForGptStep(
   stepId: PromptId,
   prompts: AiPrompts | null,
@@ -195,7 +194,8 @@ function buildFullPromptForGptStep(
   generatedBullets?: { current: string; last: string },
   roleContext?: string | null
 ): string {
-  const baseCorePrompt = buildPromptForButton(stepId, prompts, params);
+  const paramsWithRole = { ...params, roleContext: roleContext ?? undefined };
+  const baseCorePrompt = buildPromptForButton(stepId, prompts, paramsWithRole);
   const prefix = roleContext && roleContext.trim()
     ? `Role context (use to tailor):\n${roleContext.trim()}\n\n`
     : "";
@@ -854,18 +854,20 @@ export function JobApplicationsView() {
         ...loaded,
         profile: { ...loaded.profile, summary: "" },
         skills: [],
-        experience: (loaded.experience ?? []).map((exp: Experience) => ({
-          ...exp,
-          description: "",
-        })),
+        experience: (loaded.experience ?? []).map((exp: Experience) => {
+          const staticContent =
+            exp.useStaticBullets && (exp.staticBulletContent ?? "").trim()
+              ? (exp.staticBulletContent ?? "").trim()
+              : "";
+          return { ...exp, description: staticContent || "" };
+        }),
       };
 
       const exps = resume.experience ?? [];
       const currentCompanyName = exps[0]?.company?.trim() || app.company_name.trim();
-      const lastCompanyName = exps[1]?.company?.trim() || "";
       const params = {
         currentCompany: currentCompanyName,
-        lastCompany: lastCompanyName,
+        lastCompany: "", // set per non-current experience
         jobDescription: jd,
       };
 
@@ -876,38 +878,59 @@ export function JobApplicationsView() {
         : "";
       if (!extractedContext) return null;
 
-      // Step 1: current company bullets
-      if (bulkCancelRef.current) return null;
-      const prompt1 = buildFullPromptForGptStep(1, aiPrompts, params, undefined, extractedContext);
-      const result1 = await runGptStepInWebview(prompt1);
-      if (!result1?.trim()) return null;
-      const currentBullets = result1.trim();
-      resume = {
-        ...resume,
-        experience: (() => {
-          const list = [...(resume.experience ?? [])];
-          if (list[0]) list[0] = { ...list[0], description: currentBullets };
-          return list;
-        })(),
-      };
-
-      // Step 2: last company bullets (optional)
-      let lastBullets = "";
-      if (lastCompanyName) {
+      // Step 1: current company bullets (skip when first experience has static content)
+      const firstExp = exps[0];
+      const staticCurrent =
+        firstExp?.useStaticBullets && (firstExp.staticBulletContent ?? "").trim()
+          ? (firstExp.staticBulletContent ?? "").trim()
+          : "";
+      let currentBullets = staticCurrent;
+      if (!staticCurrent) {
         if (bulkCancelRef.current) return null;
-        const prompt2 = buildFullPromptForGptStep(2, aiPrompts, params, undefined, extractedContext);
-        const result2 = await runGptStepInWebview(prompt2);
-        if (!result2?.trim()) return null;
-        lastBullets = result2.trim();
+        const prompt1 = buildFullPromptForGptStep(1, aiPrompts, params, undefined, extractedContext);
+        const result1 = await runGptStepInWebview(prompt1);
+        if (!result1?.trim()) return null;
+        currentBullets = result1.trim();
         resume = {
           ...resume,
           experience: (() => {
             const list = [...(resume.experience ?? [])];
-            if (list[1]) list[1] = { ...list[1], description: lastBullets };
+            if (list[0]) list[0] = { ...list[0], description: currentBullets };
             return list;
           })(),
         };
       }
+
+      // Step 2: last-company prompt (or static content) for each non-current experience (index 1, 2, ...)
+      const lastBulletsParts: string[] = [];
+      for (let i = 1; i < exps.length; i++) {
+        const exp = exps[i];
+        const lastCompanyName = exp?.company?.trim() ?? "";
+        if (!lastCompanyName) continue;
+        const staticLast =
+          exp?.useStaticBullets && (exp.staticBulletContent ?? "").trim()
+            ? (exp.staticBulletContent ?? "").trim()
+            : "";
+        let bullets = staticLast;
+        if (!staticLast) {
+          if (bulkCancelRef.current) return null;
+          const paramsLast = { ...params, lastCompany: lastCompanyName };
+          const prompt2 = buildFullPromptForGptStep(2, aiPrompts, paramsLast, undefined, extractedContext);
+          const result2 = await runGptStepInWebview(prompt2);
+          if (!result2?.trim()) continue;
+          bullets = result2.trim();
+        }
+        lastBulletsParts.push(bullets);
+        resume = {
+          ...resume,
+          experience: (() => {
+            const list = [...(resume.experience ?? [])];
+            if (list[i]) list[i] = { ...list[i], description: bullets };
+            return list;
+          })(),
+        };
+      }
+      const lastBullets = lastBulletsParts.join("\n\n");
 
       // Step 3: summary
       if (bulkCancelRef.current) return null;
@@ -1477,7 +1500,13 @@ export function JobApplicationsView() {
           ...loaded,
           profile: { ...loaded.profile, summary: "" },
           skills: [],
-          experience: (loaded.experience ?? []).map((exp: Experience) => ({ ...exp, description: "" })),
+          experience: (loaded.experience ?? []).map((exp: Experience) => {
+            const staticContent =
+              exp.useStaticBullets && (exp.staticBulletContent ?? "").trim()
+                ? (exp.staticBulletContent ?? "").trim()
+                : "";
+            return { ...exp, description: staticContent || "" };
+          }),
         };
         setModalResumeData(withContentCleared);
         setModalResumeDataId(profileId);
@@ -4085,12 +4114,9 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                       onClick={async () => {
                         if (!form.job_description.trim()) return;
                         const jd = form.job_description.trim();
+                        const expList = (modalResumeData ?? defaultResumeData).experience ?? [];
                         const currentCompanyName =
-                          (modalResumeData ?? defaultResumeData).experience?.[0]?.company?.trim() ||
-                          form.company_name.trim();
-                        const lastCompanyName =
-                          (modalResumeData ?? defaultResumeData).experience?.[1]?.company?.trim() ||
-                          "";
+                          expList[0]?.company?.trim() || form.company_name.trim();
                         const key =
                           typeof window !== "undefined"
                             ? window.localStorage.getItem("resume-builder-ai-api-key") || ""
@@ -4112,7 +4138,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 mode: "extractCoreContext",
                                 jobDescription: jd,
                                 currentCompany: currentCompanyName,
-                                lastCompany: lastCompanyName,
+                                lastCompany: "",
                               }),
                             });
                             if (res0.ok) {
@@ -4134,30 +4160,37 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                             },
                           ]);
 
-                          // Step 1: current company bullets
+                          // Step 1: current company bullets (skip when first experience has static content)
                           setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 1: true }));
-                          let currentBullets = "";
+                          const firstExpData = (modalResumeData ?? defaultResumeData).experience?.[0];
+                          const staticBullets =
+                            firstExpData?.useStaticBullets &&
+                            (firstExpData.staticBulletContent ?? "").trim()
+                              ? (firstExpData.staticBulletContent ?? "").trim()
+                              : "";
+                          let currentBullets = staticBullets || "";
                           try {
-                            const history1 = [
-                              {
-                                role: "assistant" as const,
-                                content: extractedContext,
-                              },
-                            ];
-                            const res1 = await fetch("/api/ai/generate", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                apiKey: key,
-                                mode: "bulletsCurrent",
-                                jobDescription: jd,
-                                currentCompany: currentCompanyName,
-                                lastCompany: lastCompanyName,
-                                prompts: aiPrompts,
-                                roleContext: extractedContext,
-                                messages: history1,
-                              }),
-                            });
+                            if (!staticBullets) {
+                              const history1 = [
+                                {
+                                  role: "assistant" as const,
+                                  content: extractedContext,
+                                },
+                              ];
+                              const res1 = await fetch("/api/ai/generate", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  apiKey: key,
+                                  mode: "bulletsCurrent",
+                                  jobDescription: jd,
+                                  currentCompany: currentCompanyName,
+                                  lastCompany: "",
+                                  prompts: aiPrompts,
+                                  roleContext: extractedContext,
+                                  messages: history1,
+                                }),
+                              });
                               if (res1.ok) {
                                 const json1 = (await res1.json()) as { text?: string };
                                 currentBullets = (json1.text ?? "").trim();
@@ -4176,60 +4209,81 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   ]);
                                 }
                               }
+                            } else {
+                              setChatMessages((prev) => [
+                                ...prev,
+                                { role: "assistant", content: currentBullets },
+                              ]);
+                            }
                           } finally {
                             setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 1: false }));
                           }
 
-                          // Step 2: last company bullets
+                          // Step 2: last-company prompt (or static content) for each non-current experience (index 1, 2, ...)
                           setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 2: true }));
-                          let lastBullets = "";
+                          const lastBulletsParts: string[] = [];
                           try {
-                            if (lastCompanyName) {
-                              const history2 = [
-                                {
-                                  role: "assistant" as const,
-                                  content: extractedContext,
-                                },
-                                ...(currentBullets
-                                  ? [{ role: "assistant" as const, content: currentBullets }]
-                                  : []),
-                              ];
-                              const res2 = await fetch("/api/ai/generate", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                  apiKey: key,
-                                  mode: "bulletsLast",
-                                  jobDescription: jd,
-                                  currentCompany: currentCompanyName,
-                                  lastCompany: lastCompanyName,
-                                  prompts: aiPrompts,
-                                  roleContext: extractedContext,
-                                  messages: history2,
-                                }),
-                              });
-                              if (res2.ok) {
-                                const json2 = (await res2.json()) as { text?: string };
-                                lastBullets = (json2.text ?? "").trim();
-                                if (lastBullets) {
-                                  setModalResumeData((prev: ResumeData | null) => {
-                                    const cur = prev ?? defaultResumeData;
-                                    const exps = [...(cur.experience ?? [])];
-                                    if (exps[1]) exps[1] = { ...exps[1], description: lastBullets };
-                                    return { ...cur, experience: exps };
-                                  });
-                                  setModalContentVersion((v) => v + 1);
-                                  schedulePdfRefreshRef.current();
-                                  setChatMessages((prev) => [
-                                    ...prev,
-                                    { role: "assistant", content: lastBullets },
-                                  ]);
+                            const expList = (modalResumeData ?? defaultResumeData).experience ?? [];
+                            for (let i = 1; i < expList.length; i++) {
+                              const exp = expList[i];
+                              const lastCompanyName = exp?.company?.trim() ?? "";
+                              if (!lastCompanyName) continue;
+                              const staticLast =
+                                exp?.useStaticBullets && (exp.staticBulletContent ?? "").trim()
+                                  ? (exp.staticBulletContent ?? "").trim()
+                                  : "";
+                              let bullets = staticLast;
+                              if (!staticLast) {
+                                const history2 = [
+                                  {
+                                    role: "assistant" as const,
+                                    content: extractedContext,
+                                  },
+                                  ...(currentBullets
+                                    ? [{ role: "assistant" as const, content: currentBullets }]
+                                    : []),
+                                  ...lastBulletsParts.map((c) => ({ role: "assistant" as const, content: c })),
+                                ];
+                                const res2 = await fetch("/api/ai/generate", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    apiKey: key,
+                                    mode: "bulletsLast",
+                                    jobDescription: jd,
+                                    currentCompany: currentCompanyName,
+                                    lastCompany: lastCompanyName,
+                                    prompts: aiPrompts,
+                                    roleContext: extractedContext,
+                                    messages: history2,
+                                  }),
+                                });
+                                if (res2.ok) {
+                                  const json2 = (await res2.json()) as { text?: string };
+                                  bullets = (json2.text ?? "").trim();
                                 }
+                              }
+                              if (bullets) {
+                                lastBulletsParts.push(bullets);
+                                const idx = i;
+                                setModalResumeData((prev: ResumeData | null) => {
+                                  const cur = prev ?? defaultResumeData;
+                                  const exps = [...(cur.experience ?? [])];
+                                  if (exps[idx]) exps[idx] = { ...exps[idx], description: bullets };
+                                  return { ...cur, experience: exps };
+                                });
+                                setModalContentVersion((v) => v + 1);
+                                schedulePdfRefreshRef.current();
+                                setChatMessages((prev) => [
+                                  ...prev,
+                                  { role: "assistant", content: bullets },
+                                ]);
                               }
                             }
                           } finally {
                             setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 2: false }));
                           }
+                          const lastBullets = lastBulletsParts.join("\n\n");
 
                           // Step 3: summary
                           setAiButtonLoading((s: Record<PromptId, boolean>) => ({ ...s, 3: true }));
@@ -4254,7 +4308,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 mode: "summary",
                                 jobDescription: jd,
                                 currentCompany: currentCompanyName,
-                                lastCompany: lastCompanyName,
+                                lastCompany: "",
                                 prompts: aiPrompts,
                                 generatedBullets: { current: currentBullets, last: lastBullets },
                                 roleContext: extractedContext,
@@ -4303,7 +4357,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 mode: "skills",
                                 jobDescription: jd,
                                 currentCompany: currentCompanyName,
-                                lastCompany: lastCompanyName,
+                                lastCompany: "",
                                 prompts: aiPrompts,
                                 generatedBullets: { current: currentBullets, last: lastBullets },
                                 roleContext: extractedContext,
@@ -4343,14 +4397,12 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                       onClick={async () => {
                         if (!form.job_description.trim() || !aiPrompts) return;
                         const jd = form.job_description.trim();
+                        const expList = (modalResumeData ?? defaultResumeData).experience ?? [];
                         const currentCompanyName =
-                          (modalResumeData ?? defaultResumeData).experience?.[0]?.company?.trim() ||
-                          form.company_name.trim();
-                        const lastCompanyName =
-                          (modalResumeData ?? defaultResumeData).experience?.[1]?.company?.trim() || "";
+                          expList[0]?.company?.trim() || form.company_name.trim();
                         const params = {
                           currentCompany: currentCompanyName,
-                          lastCompany: lastCompanyName,
+                          lastCompany: "",
                           jobDescription: jd,
                         };
                         setGptPipelineRunning(true);
@@ -4364,44 +4416,66 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                           setGptPipelineRunning(false);
                           return;
                         }
-                        let currentBullets = "";
-                        let lastBullets = "";
+                        const firstExpForStatic = expList[0];
+                        const staticBullets =
+                          firstExpForStatic?.useStaticBullets &&
+                          (firstExpForStatic.staticBulletContent ?? "").trim()
+                            ? (firstExpForStatic.staticBulletContent ?? "").trim()
+                            : "";
+                        let currentBullets = staticBullets;
+                        const lastBulletsParts: string[] = [];
                         try {
-                          // Step 1: current company bullets
-                          const prompt1 = buildFullPromptForGptStep(1, aiPrompts, params, undefined, extractedContext);
-                          const result1 = await runGptStepInWebview(prompt1);
-                          if (!result1?.trim()) {
-                            setGptPipelineRunning(false);
-                            return;
-                          }
-                          currentBullets = result1.trim();
-                          setModalResumeData((prev: ResumeData | null) => {
-                            const cur = prev ?? defaultResumeData;
-                            const exps = [...(cur.experience ?? [])];
-                            if (exps[0]) exps[0] = { ...exps[0], description: currentBullets };
-                            return { ...cur, experience: exps };
-                          });
-                          setModalContentVersion((v) => v + 1);
-                          schedulePdfRefreshRef.current();
-
-                          // Step 2: last company bullets
-                          if (lastCompanyName) {
-                            const prompt2 = buildFullPromptForGptStep(2, aiPrompts, params, undefined, extractedContext);
-                            const result2 = await runGptStepInWebview(prompt2);
-                            if (!result2?.trim()) {
+                          // Step 1: current company bullets (skip when first experience has static content)
+                          if (!staticBullets) {
+                            const prompt1 = buildFullPromptForGptStep(1, aiPrompts, params, undefined, extractedContext);
+                            const result1 = await runGptStepInWebview(prompt1);
+                            if (!result1?.trim()) {
                               setGptPipelineRunning(false);
                               return;
                             }
-                            lastBullets = result2.trim();
+                            currentBullets = result1.trim();
                             setModalResumeData((prev: ResumeData | null) => {
                               const cur = prev ?? defaultResumeData;
                               const exps = [...(cur.experience ?? [])];
-                              if (exps[1]) exps[1] = { ...exps[1], description: lastBullets };
+                              if (exps[0]) exps[0] = { ...exps[0], description: currentBullets };
                               return { ...cur, experience: exps };
                             });
                             setModalContentVersion((v) => v + 1);
                             schedulePdfRefreshRef.current();
                           }
+
+                          // Step 2: last-company prompt (or static content) for each non-current experience
+                          for (let i = 1; i < expList.length; i++) {
+                            const exp = expList[i];
+                            const lastCompanyName = exp?.company?.trim() ?? "";
+                            if (!lastCompanyName) continue;
+                            const staticLast =
+                              exp?.useStaticBullets && (exp.staticBulletContent ?? "").trim()
+                                ? (exp.staticBulletContent ?? "").trim()
+                                : "";
+                            let bullets = staticLast;
+                            if (!staticLast) {
+                              const paramsLast = { ...params, lastCompany: lastCompanyName };
+                              const prompt2 = buildFullPromptForGptStep(2, aiPrompts, paramsLast, undefined, extractedContext);
+                              const result2 = await runGptStepInWebview(prompt2);
+                              if (!result2?.trim()) {
+                                setGptPipelineRunning(false);
+                                return;
+                              }
+                              bullets = result2.trim();
+                            }
+                            lastBulletsParts.push(bullets);
+                            const idx = i;
+                            setModalResumeData((prev: ResumeData | null) => {
+                              const cur = prev ?? defaultResumeData;
+                              const exps = [...(cur.experience ?? [])];
+                              if (exps[idx]) exps[idx] = { ...exps[idx], description: bullets };
+                              return { ...cur, experience: exps };
+                            });
+                            setModalContentVersion((v) => v + 1);
+                            schedulePdfRefreshRef.current();
+                          }
+                          const lastBullets = lastBulletsParts.join("\n\n");
 
                           // Step 3: summary
                           const prompt3 = buildFullPromptForGptStep(
@@ -4529,6 +4603,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                 currentCompany: currentCompanyName,
                                 lastCompany: lastCompanyName,
                                 jobDescription: jobDesc,
+                                roleContext: roleContext ?? undefined,
                               });
                               if (!promptText) return;
                               await writeTextToClipboard(promptText);

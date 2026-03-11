@@ -281,7 +281,8 @@ export default function ProfilePage() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-7xl">
+    <div className="min-h-screen overflow-y-auto">
+      <div className="container mx-auto px-4 py-8 max-w-7xl">
       <div className="flex items-center justify-between gap-4 mb-6">
         <h1 className="text-xl font-semibold">Profiles</h1>
         <Button
@@ -637,6 +638,7 @@ export default function ProfilePage() {
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

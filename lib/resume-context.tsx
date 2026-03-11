@@ -65,12 +65,15 @@ async function fetchProfileData(id: string): Promise<StoredProfileData> {
   return json.data as StoredProfileData;
 }
 
+const REFRESH_PROFILES_DEBOUNCE_MS = 400;
+
 export function ResumeProvider({ children }: { children: React.ReactNode }) {
   const [data, setDataState] = useState<StoredProfileData>(defaultResumeData);
   const [profiles, setProfiles] = useState<ProfileMeta[]>([]);
   const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
   const [activeProfileId, setActiveProfileIdState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const refreshProfilesTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshProfiles = useCallback(async () => {
     try {
@@ -150,9 +153,15 @@ export function ResumeProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ data: newData }),
       });
       if (!res.ok) throw new Error("Failed to save profile");
-      // Don't refresh profile list on data save; list only changes on create/rename/delete
+      if (refreshProfilesTimeoutRef.current != null) {
+        clearTimeout(refreshProfilesTimeoutRef.current);
+      }
+      refreshProfilesTimeoutRef.current = setTimeout(() => {
+        refreshProfilesTimeoutRef.current = null;
+        void refreshProfiles();
+      }, REFRESH_PROFILES_DEBOUNCE_MS);
     },
-    [currentProfileId]
+    [currentProfileId, refreshProfiles]
   );
 
   const setData = useCallback(

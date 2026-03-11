@@ -14,10 +14,8 @@
 # production
 /build
 
-# local data (JSON store) and local-only folders
-/data/*.json
-/data/pdf-cache/
-/data/job-pdfs/
+# local data (SQLite DB, cache, and PDFs)
+/data/
 
 # desktop app build outputs (source is tracked)
 /desktop/node_modules/
