@@ -66,7 +66,7 @@ export function Template3({ data, style }: { data: ResumeData; style?: ResumeSty
 
       {profile.summary && s.showSummary !== false && (
         <section style={{ marginTop: `${sectionTop}in`, marginBottom: `${sectionBottom}in` }}>
-          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px", paddingBottom: "3px", borderBottom: "1px solid #e5e7eb" }}>
+          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px", paddingBottom: "3px", borderBottom: "1px solidrgb(127, 127, 129)" }}>
             Professional Summary
           </h2>
           <p style={{ margin: 0, color: s.bodyColor ?? "#444" }}>{renderWithBold(profile.summary)}</p>
@@ -75,7 +75,7 @@ export function Template3({ data, style }: { data: ResumeData; style?: ResumeSty
 
       {experience.length > 0 && (
         <section style={{ marginTop: `${sectionTop}in`, marginBottom: `${sectionBottom}in` }}>
-          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px", paddingBottom: "3px", borderBottom: "1px solid #e5e7eb" }}>
+          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px", paddingBottom: "3px", borderBottom: "1px solid #9ca3af" }}>
             Work Experience
           </h2>
           {experience.map((exp) => (
@@ -104,7 +104,7 @@ export function Template3({ data, style }: { data: ResumeData; style?: ResumeSty
 
       {education.length > 0 && (
         <section style={{ marginTop: `${sectionTop}in`, marginBottom: `${sectionBottom}in` }}>
-          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px", paddingBottom: "3px", borderBottom: "1px solid #e5e7eb" }}>
+          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px", paddingBottom: "3px", borderBottom: "1px solid #9ca3af" }}>
             Education
           </h2>
           {education.map((edu) => (
@@ -131,7 +131,7 @@ export function Template3({ data, style }: { data: ResumeData; style?: ResumeSty
 
       {skills.length > 0 && (
         <section style={{ marginTop: `${sectionTop}in`, marginBottom: `${sectionBottom}in` }}>
-          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px", paddingBottom: "3px", borderBottom: "1px solid #e5e7eb" }}>
+          <h2 style={{ fontSize: `${sectionPt}pt`, fontWeight: 700, color: s.sectionColor ?? dark, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px", paddingBottom: "3px", borderBottom: "1px solid #9ca3af" }}>
             Technical Skills
           </h2>
           {groupSkillsByCategory(skills).map(({ category, skills: groupSkills }) => (

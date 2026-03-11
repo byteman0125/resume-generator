@@ -1,9 +1,11 @@
-const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain } = require("electron");
+const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { execFile } = require("child_process");
 
 const DIST_DIR = path.join(__dirname, "..", "dist");
+const PRELOAD_PATH = path.join(__dirname, "preload.js");
 
 const MIME = {
   ".html": "text/html",
@@ -61,6 +63,7 @@ function createWindow() {
       contextIsolation: true,
       webSecurity: false,
       webviewTag: true,
+      preload: PRELOAD_PATH,
     },
   });
 
@@ -68,6 +71,12 @@ function createWindow() {
   win.loadURL("app://./index.html");
 
   win.once("ready-to-show", () => {
+    // In development, open DevTools so renderer logs (e.g. [ResumeCopy]) are visible.
+    if (!app.isPackaged) {
+      try {
+        win.webContents.openDevTools();
+      } catch (_) {}
+    }
     // Always start in maximized (full) window mode.
     try {
       win.maximize();
@@ -117,6 +126,7 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
+  console.log("[ResumeCopy] Main process ready. When you click Copy (resume cell), logs will appear here.");
   protocol.handle("app", (request) => {
     const requestUrl = request.url;
     let pathname = requestUrl.replace(/^app:\/\//, "").replace(/\?.*$/, "").replace(/#.*$/, "");
@@ -192,11 +202,31 @@ ipcMain.on("resume-drag", (event, { buffer, fileName, appId }) => {
   }
 });
 
-// Save resume PDF to a stable temp location so the user can access it from the filesystem.
-// We keep one file per profile name (overwritten on each copy) to avoid clutter.
-const RESUME_COPY_TEMP_BASE = path.join(os.tmpdir(), "resume-builder-copy");
+// On Windows, use PowerShell + .NET to set clipboard with file so Ctrl+V pastes the file (like Explorer).
+function setWindowsClipboardFile(absolutePath) {
+  return new Promise((resolve, reject) => {
+    // Escape single quotes for PowerShell single-quoted string (double them).
+    const escaped = absolutePath.replace(/'/g, "''");
+    const script = `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Collections.Specialized.StringCollection; $f.Add('${escaped}'); [System.Windows.Forms.Clipboard]::SetFileDropList($f)`;
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { windowsHide: true, timeout: 10000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          if (stderr && stderr.trim()) console.warn("[ResumeCopy] PowerShell stderr:", stderr.trim());
+          reject(err);
+          return;
+        }
+        resolve();
+      }
+    );
+  });
+}
 
+// Save resume PDF to Downloads and (on Windows) put file on clipboard so Ctrl+V pastes the file.
 ipcMain.handle("save-resume-temp", async (event, { buffer, fileName, profileName }) => {
+  console.log("[ResumeCopy] main: save-resume-temp called", { fileName, profileName, bufferLength: buffer?.byteLength ?? buffer?.length });
   try {
     const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
     const baseName =
@@ -208,13 +238,31 @@ ipcMain.handle("save-resume-temp", async (event, { buffer, fileName, profileName
       ((fileName || "").toString().trim() &&
         (fileName || "").toString().trim().replace(/[<>:"/\\|?*]/g, "_").slice(0, 200)) ||
       `${safeBase}.pdf`;
-    const dir = RESUME_COPY_TEMP_BASE;
+    const dir = path.join(app.getPath("downloads"), ".");
     const filePath = path.join(dir, finalName);
+    console.log("[ResumeCopy] main: saving to", filePath);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(filePath, buf);
-    return filePath;
+
+    // Set clipboard: on Windows use PowerShell + .NET so Ctrl+V pastes the file (like File Explorer).
+    let clipboardFileSet = false;
+    if (process.platform === "win32") {
+      try {
+        await setWindowsClipboardFile(filePath);
+        clipboardFileSet = true;
+        console.log("[ResumeCopy] main: clipboard file set via PowerShell (SetFileDropList)");
+      } catch (clipErr) {
+        console.warn("[ResumeCopy] main: PowerShell clipboard failed, falling back to path as text:", clipErr);
+        clipboard.writeText(filePath);
+      }
+    } else {
+      clipboard.writeText(filePath);
+    }
+
+    console.log("[ResumeCopy] main: success", { filePath, clipboardFile: clipboardFileSet });
+    return { filePath, clipboardFile: clipboardFileSet };
   } catch (err) {
-    console.error("Failed to save resume to temp:", err);
+    console.error("[ResumeCopy] main: Failed to save resume:", err);
     return null;
   }
 });
