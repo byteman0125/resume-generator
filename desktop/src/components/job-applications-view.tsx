@@ -24,7 +24,7 @@ import { useResume, type ProfileMeta } from "@/lib/resume-context";
 import { defaultResumeData, APPLICATION_RESUME_STYLE, type Experience, type ResumeData, type StoredProfileData } from "@/lib/resume-store";
 import { FORMAT_LIST, formatIdToTemplateId, type FormatId } from "@/lib/template-format";
 import { ApplicationResumeEditor } from "@/components/application-resume-editor";
-import { Check, Copy, Download, ExternalLink, FileText, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, MessageCircle } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -3454,6 +3454,21 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                     onClick={(ev) => {
                                       ev.preventDefault();
                                       ev.stopPropagation();
+                                      // Open GPT chat in parallel (same as former GPT button: open panel and load this app's chat if any)
+                                      const chatUrl = gptChatUrls[app.id];
+                                      if (!deepSeekPanelOpen) toggleDeepSeekPanel();
+                                      if (chatUrl) {
+                                        setTimeout(() => {
+                                          const wv = deepSeekWebViewRef.current as unknown as { loadURL?: (u: string) => void; src?: string } | null;
+                                          if (!wv) return;
+                                          try {
+                                            if (typeof wv.loadURL === "function") wv.loadURL(chatUrl);
+                                            else if ("src" in wv) (wv as { src?: string }).src = chatUrl;
+                                          } catch {
+                                            // ignore navigation errors
+                                          }
+                                        }, 50);
+                                      }
                                       const log = (msg: string, data?: unknown) => {
                                         console.log("[ResumeCopy]", msg, data ?? "");
                                       };
@@ -3588,69 +3603,6 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                       <Copy className="h-4 w-4" />
                                     )}
                                   </button>
-                                  <button
-                                    type="button"
-                                    className="inline-flex items-center justify-center rounded hover:bg-muted p-1"
-                                    onClick={async (ev) => {
-                                      ev.stopPropagation();
-                                      try {
-                                        const res = await fetch(`/api/job-applications/${app.id}/pdf`);
-                                        if (!res.ok) throw new Error("Failed to fetch PDF");
-                                        const blob = await res.blob();
-                                        const url = URL.createObjectURL(blob);
-                                        const baseName =
-                                          profileName(app.profile_id) ||
-                                          (app.company_name ?? "") ||
-                                          (app.title ?? "") ||
-                                          "resume";
-                                        const safeBase = baseName
-                                          .replace(/[\\\\/:*?"<>|]/g, "_")
-                                          .trim() || "resume";
-                                        const a = document.createElement("a");
-                                        a.href = url;
-                                        a.download = `${safeBase}.pdf`;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        a.remove();
-                                        URL.revokeObjectURL(url);
-                                      } catch (err) {
-                                        console.error("Download PDF failed:", err);
-                                      }
-                                    }}
-                                    title="Download PDF"
-                                  >
-                                    <Download className="h-4 w-4" />
-                                  </button>
-                                  {gptChatUrls[app.id] ? (
-                                    <button
-                                      type="button"
-                                      className="inline-flex items-center justify-center rounded hover:bg-sky-100 dark:hover:bg-sky-900/40 p-1 text-sky-500"
-                                      onClick={(ev) => {
-                                        ev.stopPropagation();
-                                        const url = gptChatUrls[app.id];
-                                        if (!url) return;
-                                        if (!deepSeekPanelOpen) {
-                                          toggleDeepSeekPanel();
-                                        }
-                                        setTimeout(() => {
-                                          const wv = deepSeekWebViewRef.current as unknown as { loadURL?: (u: string) => void; src?: string } | null;
-                                          if (!wv) return;
-                                          try {
-                                            if (typeof wv.loadURL === "function") {
-                                              wv.loadURL(url);
-                                            } else if ("src" in wv) {
-                                              (wv as { src?: string }).src = url;
-                                            }
-                                          } catch {
-                                            // ignore navigation errors
-                                          }
-                                        }, 50);
-                                      }}
-                                      title="Open GPT messages"
-                                    >
-                                      <MessageCircle className="h-4 w-4" />
-                                    </button>
-                                  ) : null}
                                 </div>
                               );
                             }
