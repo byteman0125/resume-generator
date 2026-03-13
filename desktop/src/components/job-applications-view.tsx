@@ -72,6 +72,19 @@ function isPlaceholder(app: RowItem): app is JobApplication & { _placeholder: tr
   return "_placeholder" in app && (app as { _placeholder?: boolean })._placeholder === true;
 }
 
+/** Strip trailing Google search reference markers (e.g. " -10.", " -1-10.", " -4.") from a single line. */
+function stripGoogleRefSuffix(line: string): string {
+  return line.replace(/\s-\d+(?:-\d+)?\.?$/, "");
+}
+
+/** Clean text line-by-line: strip Google ref suffixes. Use for pasted JD and for content read from GPT chat. */
+function stripGoogleRefSuffixFromText(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => stripGoogleRefSuffix(line))
+    .join("\n");
+}
+
 function jobAppFieldsDiffer(a: JobApplication, b: JobApplication): boolean {
   return (
     (a.date ?? "") !== (b.date ?? "") ||
@@ -231,12 +244,57 @@ function buildPromptForButton(
 function buildExtractionPromptForGpt(jobDescription: string): string {
   const jd = (jobDescription ?? "").trim();
   if (!jd) return "";
-  return (
-    "You are a resume assistant. Extract from the job description below: (1) Job title, (2) 3–5 key responsibilities as short bullet points, (3) 8–12 skills or keywords, (4) Tone/seniority. " +
-    "Output in a clear, consistent format. Do not add commentary.\n\n" +
-    "Job description:\n\n" +
-    jd
-  );
+  return [
+    "JOB DESCRIPTION EXTRACTOR",
+    "",
+    "You are a resume assistant. Extract the following from the job description below and output in a clean, consistent format.",
+    "Do not summarize, interpret, paraphrase, or add commentary — preserve exact names and terms as written in the JD.",
+    "",
+    "---",
+    "",
+    "Input",
+    "Job Description:",
+    "",
+    jd,
+    "",
+    "---",
+    "",
+    "Extract exactly these 6 sections:",
+    "",
+    "(1) JOB TITLE",
+    "- Exact job title as written",
+    "",
+    "(2) SENIORITY LEVEL",
+    "- Junior / Mid / Senior / Staff / Principal — infer from title and responsibilities if not explicitly stated",
+    "",
+    "(3) KEY RESPONSIBILITIES",
+    "- 4-6 short bullet points summarizing core responsibilities",
+    "- Use the JD's own language — do not rephrase or upgrade wording",
+    "",
+    "(4) TECH STACK — EXACT NAMES ONLY",
+    "- List every technology, tool, framework, language, database, and cloud service mentioned",
+    "- Exact names only — never group, summarize, or generalize",
+    '- Never write "cloud platforms", "database technologies", or "modern frameworks" — always write the exact name (e.g. AWS Lambda, PostgreSQL, React)',
+    "- Separate into subcategories:",
+    "  - Cloud provider and native services: (e.g. AWS Lambda, Azure Functions, GCP BigQuery)",
+    "  - Programming languages: (e.g. Python, Java, Go)",
+    "  - Frameworks and libraries: (e.g. FastAPI, Spring Boot, React)",
+    "  - Databases: (e.g. PostgreSQL, MongoDB, Redis)",
+    "  - DevOps and infrastructure tools: (e.g. Kafka, Terraform, Docker, Kubernetes)",
+    "  - AI and ML tools: (e.g. LangChain, OpenAI API, HuggingFace)",
+    "",
+    "(5) CLOUD PROVIDER",
+    "- Identify the primary cloud platform targeted: AWS / Azure / GCP / Multi-cloud / Not specified",
+    "- List all cloud-specific services mentioned (e.g. S3, Cosmos DB, BigQuery)",
+    "",
+    "(6) CORE SKILLS AND KEYWORDS",
+    "- 8-12 non-tech keywords and soft skills (e.g. distributed systems, high availability, cross-functional collaboration, event-driven architecture)",
+    "- Exact phrases from the JD only — no invention",
+    "",
+    "---",
+    "",
+    "Output the 6 sections only — no commentary, no explanations, no additional text.",
+  ].join("\n");
 }
 
 /** Build full prompt for GPT/DeepSeek webview flow. Steps 1–2 use only role context (no full JD). Steps 3 and 4 include bullets when provided. */
@@ -604,7 +662,7 @@ export function JobApplicationsView() {
         return null;
       })();`;
       const text = await exec(lastMessageCode);
-      return typeof text === "string" ? text : null;
+      return typeof text === "string" ? stripGoogleRefSuffixFromText(text) : null;
     },
     []
   );
@@ -4804,7 +4862,12 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                   className="mt-0.5 h-7 w-full resize-none rounded border border-input bg-background px-2 py-1 text-[11px] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring overflow-hidden"
                   placeholder="Paste job description here (saved per application)"
                   value={form.job_description}
-                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setForm((f) => ({ ...f, job_description: e.target.value }))}
+                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                    setForm((f) => ({
+                      ...f,
+                      job_description: stripGoogleRefSuffixFromText(e.target.value),
+                    }))
+                  }
                   style={{ minHeight: "1.75rem", maxHeight: "2.25rem", overflowY: "auto" }}
                 />
               </div>

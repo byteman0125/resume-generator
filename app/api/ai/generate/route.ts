@@ -130,11 +130,57 @@ function buildPrompt(
 function buildExtractionPrompt(jobDescription: string): { prompt: string; error?: string } {
   const jd = (jobDescription ?? "").trim();
   if (!jd) return { prompt: "", error: "Job description is required for extraction" };
-  const prompt =
-    "You are a resume assistant. Extract from the job description below: (1) Job title, (2) 3–5 key responsibilities as short bullet points, (3) 8–12 skills or keywords, (4) Tone/seniority. " +
-    "Output in a clear, consistent format. Do not add commentary.\n\n" +
-    "Job description:\n\n" +
-    jd;
+  const prompt = [
+    "JOB DESCRIPTION EXTRACTOR",
+    "",
+    "You are a resume assistant. Extract the following from the job description below and output in a clean, consistent format.",
+    "Do not summarize, interpret, paraphrase, or add commentary — preserve exact names and terms as written in the JD.",
+    "",
+    "---",
+    "",
+    "Input",
+    "Job Description:",
+    "",
+    jd,
+    "",
+    "---",
+    "",
+    "Extract exactly these 6 sections:",
+    "",
+    "(1) JOB TITLE",
+    "- Exact job title as written",
+    "",
+    "(2) SENIORITY LEVEL",
+    "- Junior / Mid / Senior / Staff / Principal — infer from title and responsibilities if not explicitly stated",
+    "",
+    "(3) KEY RESPONSIBILITIES",
+    "- 4-6 short bullet points summarizing core responsibilities",
+    "- Use the JD's own language — do not rephrase or upgrade wording",
+    "",
+    "(4) TECH STACK — EXACT NAMES ONLY",
+    "- List every technology, tool, framework, language, database, and cloud service mentioned",
+    "- Exact names only — never group, summarize, or generalize",
+    '- Never write "cloud platforms", "database technologies", or "modern frameworks" — always write the exact name (e.g. AWS Lambda, PostgreSQL, React)',
+    "- Separate into subcategories:",
+    "  - Cloud provider and native services: (e.g. AWS Lambda, Azure Functions, GCP BigQuery)",
+    "  - Programming languages: (e.g. Python, Java, Go)",
+    "  - Frameworks and libraries: (e.g. FastAPI, Spring Boot, React)",
+    "  - Databases: (e.g. PostgreSQL, MongoDB, Redis)",
+    "  - DevOps and infrastructure tools: (e.g. Kafka, Terraform, Docker, Kubernetes)",
+    "  - AI and ML tools: (e.g. LangChain, OpenAI API, HuggingFace)",
+    "",
+    "(5) CLOUD PROVIDER",
+    "- Identify the primary cloud platform targeted: AWS / Azure / GCP / Multi-cloud / Not specified",
+    "- List all cloud-specific services mentioned (e.g. S3, Cosmos DB, BigQuery)",
+    "",
+    "(6) CORE SKILLS AND KEYWORDS",
+    "- 8-12 non-tech keywords and soft skills (e.g. distributed systems, high availability, cross-functional collaboration, event-driven architecture)",
+    "- Exact phrases from the JD only — no invention",
+    "",
+    "---",
+    "",
+    "Output the 6 sections only — no commentary, no explanations, no additional text.",
+  ].join("\n");
   return { prompt, error: undefined };
 }
 
