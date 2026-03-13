@@ -2021,7 +2021,7 @@ export function JobApplicationsView() {
   const selectionAnchorRef = useRef<{ row: number; col: number } | null>(null);
   const isSelectingRef = useRef(false);
 
-  /** Blue border on the outer edge and light blue background for the selection rectangle. */
+  /** Colored border on the outer edge and soft background for the selection rectangle (also used for search match). */
   const getSelectionBorderClass = useCallback(
     (row: number, col: number) => {
       if (row === 0) return ""; // header is not selectable
@@ -2037,11 +2037,11 @@ export function JobApplicationsView() {
       const isLeft = col === c0;
       const isRight = col === c1;
       return [
-        "bg-blue-100 border-blue-200",
-        isTop && "border-t-blue-500",
-        isBottom && "border-b-blue-500",
-        isLeft && "border-l-blue-500",
-        isRight && "border-r-blue-500",
+        "bg-amber-100 border-amber-200",
+        isTop && "border-t-amber-500",
+        isBottom && "border-b-amber-500",
+        isLeft && "border-l-amber-500",
+        isRight && "border-r-amber-500",
       ]
         .filter(Boolean)
         .join(" ");
