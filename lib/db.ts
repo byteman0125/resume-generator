@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
 import type { ResumeData } from "./resume-store";
+import { normalizeCompanyForDuplicateKey } from "./normalize-company";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "app.db");
@@ -276,16 +277,23 @@ export function getDuplicateJobApplicationKeys(): string[] {
   const rows = db
     .prepare<
       unknown[],
-      { profile_id: string; company_key: string }
+      { profile_id: string; company_name: string }
     >(
-      `SELECT profile_id, LOWER(TRIM(company_name)) AS company_key
+      `SELECT profile_id, company_name
        FROM job_applications
-       WHERE profile_id IS NOT NULL AND profile_id != '' AND TRIM(company_name) != ''
-       GROUP BY profile_id, LOWER(TRIM(company_name))
-       HAVING COUNT(*) > 1`
+       WHERE profile_id IS NOT NULL AND profile_id != '' AND TRIM(company_name) != ''`
     )
     .all();
-  return rows.map((r) => `${r.profile_id}::${r.company_key}`);
+  const countByKey = new Map<string, number>();
+  for (const r of rows) {
+    const norm = normalizeCompanyForDuplicateKey(r.company_name);
+    if (!norm) continue;
+    const key = `${r.profile_id}::${norm}`;
+    countByKey.set(key, (countByKey.get(key) ?? 0) + 1);
+  }
+  return Array.from(countByKey.entries())
+    .filter(([, n]) => n > 1)
+    .map(([k]) => k);
 }
 
 export function getJobApplication(id: string): JobApplicationRow | undefined {

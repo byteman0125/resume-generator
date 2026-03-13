@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useResume, type ProfileMeta } from "@/lib/resume-context";
+import { normalizeCompanyForDuplicateKey } from "@/lib/normalize-company";
 import { defaultResumeData, APPLICATION_RESUME_STYLE, type Experience, type ResumeData, type StoredProfileData } from "@/lib/resume-store";
 import { FORMAT_LIST, formatIdToTemplateId, type FormatId } from "@/lib/template-format";
 import { ApplicationResumeEditor } from "@/components/application-resume-editor";
@@ -69,6 +70,34 @@ type RowItem = JobApplication | (JobApplication & { _placeholder: true });
 
 function isPlaceholder(app: RowItem): app is JobApplication & { _placeholder: true } {
   return "_placeholder" in app && (app as { _placeholder?: boolean })._placeholder === true;
+}
+
+function jobAppFieldsDiffer(a: JobApplication, b: JobApplication): boolean {
+  return (
+    (a.date ?? "") !== (b.date ?? "") ||
+    (a.company_name ?? "") !== (b.company_name ?? "") ||
+    (a.title ?? "") !== (b.title ?? "") ||
+    (a.job_url ?? "") !== (b.job_url ?? "") ||
+    (a.profile_id ?? "") !== (b.profile_id ?? "") ||
+    (a.resume_file_name ?? "") !== (b.resume_file_name ?? "") ||
+    (a.job_description ?? "") !== (b.job_description ?? "") ||
+    (a.applied_manually ?? 0) !== (b.applied_manually ?? 0) ||
+    (a.gpt_chat_url ?? "") !== (b.gpt_chat_url ?? "")
+  );
+}
+
+function jobAppPatchBody(app: JobApplication): Record<string, unknown> {
+  return {
+    date: app.date ?? "",
+    company_name: app.company_name ?? "",
+    title: app.title ?? "",
+    job_url: app.job_url ?? null,
+    profile_id: app.profile_id ?? null,
+    resume_file_name: app.resume_file_name ?? null,
+    job_description: app.job_description ?? "",
+    applied_manually: app.applied_manually ?? 0,
+    gpt_chat_url: app.gpt_chat_url ?? null,
+  };
 }
 
 const COLUMN_KEYS = [
@@ -652,6 +681,7 @@ export function JobApplicationsView() {
     app: JobApplication;
   } | null>(null);
   const resumeContextMenuRef = useRef<HTMLDivElement>(null);
+  const [regeneratingResumeId, setRegeneratingResumeId] = useState<string | null>(null);
   const [copiedPdfId, setCopiedPdfId] = useState<string | null>(null);
   const pdfBlobCacheRef = useRef<Map<string, Blob>>(new Map());
   /** Cached PDF ArrayBuffers for drag-and-drop (must be ready before dragStart). */
@@ -1236,13 +1266,13 @@ export function JobApplicationsView() {
   const SCROLL_STORAGE_KEY = "job-applications-scroll";
   const [history, setHistory] = useState<RowItem[][]>([]);
   const [future, setFuture] = useState<RowItem[][]>([]);
-  const pushHistory = useCallback(
-    (prev: RowItem[]) => {
-      setHistory((h) => [...h.slice(-(UNDO_LIMIT - 1)), prev]);
-      setFuture([]);
-    },
-    [setHistory, setFuture]
-  );
+  const pushHistory = useCallback((prev: RowItem[]) => {
+    const snapshot = prev.map((a) =>
+      isPlaceholder(a) ? a : ({ ...a } as JobApplication)
+    );
+    setHistory((h) => [...h.slice(-(UNDO_LIMIT - 1)), snapshot]);
+    setFuture([]);
+  }, []);
   const tableStats = useMemo(() => {
     const real = applications.filter((a): a is JobApplication => !isPlaceholder(a));
     const hasJobInfo = (a: JobApplication) =>
@@ -1274,9 +1304,41 @@ export function JobApplicationsView() {
         !isPlaceholder(a) && !restoredIds.has(a.id)
     );
     if (toRestore.length === 0 && toRemove.length === 0) {
+      const restoredById = new Map(
+        restored
+          .filter((a): a is JobApplication => !isPlaceholder(a))
+          .map((a) => [a.id, a])
+      );
+      const toRevert = applications.filter((a): a is JobApplication => {
+        if (isPlaceholder(a)) return false;
+        const prev = restoredById.get(a.id);
+        return prev != null && jobAppFieldsDiffer(a, prev);
+      });
+      if (toRevert.length > 0) {
+        try {
+          await Promise.all(
+            toRevert.map((app) => {
+              const prev = restoredById.get(app.id)!;
+              return fetch(`/api/job-applications/${app.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(jobAppPatchBody(prev)),
+              }).then((r) => {
+                if (!r.ok) throw new Error("Failed to revert application");
+              });
+            })
+          );
+        } catch (e) {
+          console.error("Undo (revert edits in DB) failed:", e);
+          setHistory((prev) => prev.slice(0, -1));
+          fetchApplications(profileFilterId);
+          return;
+        }
+      }
       setApplications(restored);
       setHistory((prev) => prev.slice(0, -1));
       setFuture((f) => [applications, ...f]);
+      void fetchDuplicateKeys();
       return;
     }
     if (toRemove.length > 0) {
@@ -1297,6 +1359,7 @@ export function JobApplicationsView() {
       setApplications(restored);
       setHistory((prev) => prev.slice(0, -1));
       setFuture((f) => [applications, ...f]);
+      void fetchDuplicateKeys();
       return;
     }
     try {
@@ -1328,22 +1391,30 @@ export function JobApplicationsView() {
       setApplications(newRestored);
       setHistory((prev) => prev.slice(0, -1));
       setFuture((f) => [applications, ...f]);
+      void fetchDuplicateKeys();
     } catch (e) {
       console.error("Undo (restore to DB) failed:", e);
       setHistory((prev) => prev.slice(0, -1));
       fetchApplications(profileFilterId);
     }
-  }, [history, applications, profileFilterId, fetchApplications]);
+  }, [history, applications, profileFilterId, fetchApplications, fetchDuplicateKeys]);
 
   const handleRedo = useCallback(async () => {
     if (!future.length) return;
     const [next, ...rest] = future;
+    const currentIds = new Set(
+      applications.filter((a) => !isPlaceholder(a)).map((a) => a.id)
+    );
     const nextIds = new Set(
       next.filter((a) => !isPlaceholder(a)).map((a) => (a as JobApplication).id)
     );
     const toRemove = applications.filter(
       (a): a is JobApplication =>
         !isPlaceholder(a) && !nextIds.has(a.id)
+    );
+    const toRestore = next.filter(
+      (a): a is JobApplication =>
+        !isPlaceholder(a) && !currentIds.has(a.id)
     );
     if (toRemove.length > 0) {
       try {
@@ -1354,12 +1425,79 @@ export function JobApplicationsView() {
         );
       } catch (e) {
         console.error("Redo (remove from DB) failed:", e);
+        return;
       }
     }
-    setApplications(next);
-    setFuture(rest);
-    setHistory((h) => [...h, applications]);
-  }, [future, applications]);
+    if (toRestore.length === 0) {
+      const nextById = new Map(
+        next
+          .filter((a): a is JobApplication => !isPlaceholder(a))
+          .map((a) => [a.id, a])
+      );
+      const toReapply = applications.filter((a): a is JobApplication => {
+        if (isPlaceholder(a)) return false;
+        const target = nextById.get(a.id);
+        return target != null && jobAppFieldsDiffer(a, target);
+      });
+      if (toReapply.length > 0) {
+        try {
+          await Promise.all(
+            toReapply.map((app) => {
+              const target = nextById.get(app.id)!;
+              return fetch(`/api/job-applications/${app.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(jobAppPatchBody(target)),
+              }).then((r) => {
+                if (!r.ok) throw new Error("Failed to redo re-apply application");
+              });
+            })
+          );
+        } catch (e) {
+          console.error("Redo (re-apply edits in DB) failed:", e);
+          return;
+        }
+      }
+      setApplications(next);
+      setFuture(rest);
+      setHistory((h) => [...h, applications]);
+      void fetchDuplicateKeys();
+      return;
+    }
+    try {
+      const newRows = await Promise.all(
+        toRestore.map((app) =>
+          fetch("/api/job-applications", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              date: app.date,
+              company_name: app.company_name,
+              title: app.title,
+              job_url: app.job_url ?? null,
+              profile_id: app.profile_id ?? null,
+              resume_file_name: app.resume_file_name ?? null,
+              job_description: (app as JobApplication).job_description ?? "",
+            }),
+          }).then((r) => {
+            if (!r.ok) throw new Error("Failed to redo restore application");
+            return r.json() as Promise<JobApplication>;
+          })
+        )
+      );
+      const newNext = next.map((a) => {
+        const i = toRestore.indexOf(a as JobApplication);
+        if (i >= 0) return newRows[i];
+        return a;
+      });
+      setApplications(newNext);
+      setFuture(rest);
+      setHistory((h) => [...h, applications]);
+      void fetchDuplicateKeys();
+    } catch (e) {
+      console.error("Redo (restore to DB) failed:", e);
+    }
+  }, [future, applications, fetchDuplicateKeys]);
 
   type AddFormState = {
     date: string;
@@ -1749,6 +1887,8 @@ export function JobApplicationsView() {
           setApplications((prev) =>
             prev.map((a) => (a.id === appId ? { ...a, ...toMerge } : a))
           );
+          pdfBlobCacheRef.current.delete(appId);
+          pdfBufferCacheRef.current.delete(appId);
           setAddOpen(false);
           setApplyApplication(null);
           setForm({
@@ -3134,9 +3274,12 @@ export function JobApplicationsView() {
                     const isRealApp = !isPlaceholder(app);
                     const appProfileId = isRealApp ? (app as JobApplication).profile_id : null;
                     const appCompanyName = isRealApp ? (app as JobApplication).company_name ?? "" : "";
+                    const normCompany = appCompanyName
+                      ? normalizeCompanyForDuplicateKey(appCompanyName)
+                      : "";
                     const duplicateKey =
-                      appProfileId && appCompanyName
-                        ? `${appProfileId}::${appCompanyName.trim().toLowerCase()}`
+                      appProfileId && normCompany
+                        ? `${appProfileId}::${normCompany}`
                         : null;
                     const isDuplicate = Boolean(duplicateKey && duplicateApplicationKeys.has(duplicateKey));
                     const isEditing = (key: ColumnKey) =>
@@ -3431,9 +3574,14 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                         console.error("Open PDF failed:", err);
                                       }
                                     }}
-                                    title={app.resume_file_name}
+                                    title={regeneratingResumeId === app.id ? "Regenerating…" : app.resume_file_name}
+                                    disabled={regeneratingResumeId === app.id}
                                   >
-                                    <ResumeDocIcon className="h-4 w-4" />
+                                    {regeneratingResumeId === app.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                                    ) : (
+                                      <ResumeDocIcon className="h-4 w-4" />
+                                    )}
                                   </button>
                                   <button
                                     type="button"
@@ -3948,6 +4096,67 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                 }}
               >
                 Update resume
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-muted flex items-center gap-2"
+                disabled={!resumeContextMenu.app.job_description?.trim() || !!regeneratingResumeId}
+                onClick={async () => {
+                  const { app } = resumeContextMenu;
+                  setResumeContextMenu(null);
+                  if (!app.job_description?.trim()) {
+                    toast.error("Job description required to regenerate");
+                    return;
+                  }
+                  setRegeneratingResumeId(app.id);
+                  toast.info("Regenerating resume…", { duration: 2000 });
+                  if (!deepSeekPanelOpen) toggleDeepSeekPanel();
+                  try {
+                    const stored = await runGptPipelineForApplication(app);
+                    if (!stored) {
+                      toast.error("Regenerate failed (no content generated)");
+                      return;
+                    }
+                    const templateId = formatIdToTemplateId(applicationModalFormatIdRef.current);
+                    const pdfRes = await fetch("/api/pdf", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ data: stored, templateId: templateId ?? undefined }),
+                    });
+                    if (!pdfRes.ok) {
+                      toast.error("Failed to generate PDF");
+                      return;
+                    }
+                    const blob = await pdfRes.blob();
+                    const uploadRes = await fetch(`/api/job-applications/${app.id}/pdf`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/pdf" },
+                      body: blob,
+                    });
+                    if (!uploadRes.ok) {
+                      toast.error("Failed to upload resume");
+                      return;
+                    }
+                    pdfBlobCacheRef.current.delete(app.id);
+                    pdfBufferCacheRef.current.delete(app.id);
+                    const rowRes = await fetch(`/api/job-applications/${app.id}`);
+                    if (rowRes.ok) {
+                      const updated = (await rowRes.json()) as JobApplication;
+                      setApplications((prev) =>
+                        prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a))
+                      );
+                    }
+                    toast.success("Resume regenerated and GPT chat link updated");
+                  } catch (err) {
+                    console.error("Regenerate resume failed:", err);
+                    toast.error("Regenerate failed");
+                  } finally {
+                    setRegeneratingResumeId(null);
+                  }
+                }}
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", regeneratingResumeId === resumeContextMenu.app.id && "animate-spin")} />
+                Regenerate
               </button>
             </div>
           )}
