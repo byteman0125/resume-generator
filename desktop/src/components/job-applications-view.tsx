@@ -26,7 +26,7 @@ import { normalizeCompanyForDuplicateKey } from "@/lib/normalize-company";
 import { defaultResumeData, APPLICATION_RESUME_STYLE, type Experience, type ResumeData, type StoredProfileData } from "@/lib/resume-store";
 import { FORMAT_LIST, formatIdToTemplateId, type FormatId } from "@/lib/template-format";
 import { ApplicationResumeEditor } from "@/components/application-resume-editor";
-import { Check, Copy, ExternalLink, FileText, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -489,16 +489,85 @@ export function JobApplicationsView() {
     });
   }, []);
   const deepSeekWebViewRef = useRef<HTMLElement | null>(null);
+  const isDesktopDeepSeekSync = typeof window !== "undefined" && !!(window as unknown as { electron?: { setDeepSeekCookies?: unknown } }).electron?.setDeepSeekCookies;
+  const [deepSeekWebViewSrc, setDeepSeekWebViewSrc] = useState<string>(() =>
+    isDesktopDeepSeekSync ? "about:blank" : "https://chat.deepseek.com/"
+  );
+  const deepSeekCookiesLoadedFromDbRef = useRef(false);
+  const deepSeekInvalidRetryCountRef = useRef(0);
+  const DEEPSEEK_MAX_RETRIES = 3;
+
+  /** First-time load: fetch cookies from API, inject into partition, then set webview src (desktop only, no flash). */
+  useEffect(() => {
+    if (!deepSeekPanelOpen || !isDesktopDeepSeekSync) return;
+    const electron = (window as unknown as { electron?: { setDeepSeekCookies: (c: unknown[]) => Promise<unknown> } }).electron;
+    if (!electron?.setDeepSeekCookies) return;
+    if (deepSeekCookiesLoadedFromDbRef.current) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/deepseek-cookies");
+        if (cancelled) return;
+        const data = (await res.json()) as { cookies?: unknown[] };
+        const cookies = Array.isArray(data?.cookies) ? data.cookies : [];
+        if (cookies.length > 0) {
+          await electron.setDeepSeekCookies(cookies);
+        }
+        if (cancelled) return;
+        deepSeekCookiesLoadedFromDbRef.current = true;
+        setDeepSeekWebViewSrc("https://chat.deepseek.com/");
+      } catch {
+        if (!cancelled) {
+          deepSeekCookiesLoadedFromDbRef.current = true;
+          setDeepSeekWebViewSrc("https://chat.deepseek.com/");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deepSeekPanelOpen, isDesktopDeepSeekSync]);
+
   useEffect(() => {
     const el = deepSeekWebViewRef.current;
     if (!el || !deepSeekPanelOpen) return;
     const onLoad = () => {
-      const wv = el as unknown as { setZoomFactor?: (f: number) => void };
+      const wv = el as unknown as { setZoomFactor?: (f: number) => void; executeJavaScript?: (code: string) => Promise<unknown>; reload?: () => void };
       if (typeof wv.setZoomFactor === "function") wv.setZoomFactor(0.6);
+
+      if (!isDesktopDeepSeekSync || deepSeekInvalidRetryCountRef.current >= DEEPSEEK_MAX_RETRIES) return;
+      const electron = (window as unknown as { electron?: { setDeepSeekCookies: (c: unknown[]) => Promise<unknown> } }).electron;
+      if (!electron?.setDeepSeekCookies || typeof wv.executeJavaScript !== "function") return;
+
+      wv.executeJavaScript(
+        `(function(){
+          var b = document.body;
+          if (!b) return true;
+          var t = (b.innerText || '').toLowerCase();
+          return t.indexOf('log in') !== -1 || t.indexOf('login') !== -1 || !!document.querySelector('form[action*="login"], [data-testid*="login"], a[href*="login"]');
+        })()`
+      ).then((notLoggedIn) => {
+        if (notLoggedIn !== true) return;
+        if (deepSeekInvalidRetryCountRef.current >= DEEPSEEK_MAX_RETRIES) return;
+        deepSeekInvalidRetryCountRef.current += 1;
+        deepSeekCookiesLoadedFromDbRef.current = false;
+        (async () => {
+          try {
+            const res = await fetch("/api/deepseek-cookies");
+            const data = (await res.json()) as { cookies?: unknown[] };
+            const cookies = Array.isArray(data?.cookies) ? data.cookies : [];
+            if (cookies.length > 0) await electron.setDeepSeekCookies(cookies);
+            if (typeof wv.reload === "function") wv.reload();
+          } catch {
+            deepSeekCookiesLoadedFromDbRef.current = true;
+          }
+        })();
+      }).catch(() => {});
     };
     el.addEventListener("did-finish-load", onLoad);
     return () => el.removeEventListener("did-finish-load", onLoad);
-  }, [deepSeekPanelOpen]);
+  }, [deepSeekPanelOpen, isDesktopDeepSeekSync]);
 
   /** When application modal opens, click the DeepSeek "new chat" button in the webview so user gets a fresh chat. */
   useEffect(() => {
@@ -4254,6 +4323,34 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
               DeepSeek Chat
             </span>
             <div className="flex items-center gap-1">
+              {user?.role === "admin" && isDesktopDeepSeekSync && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0"
+                  onClick={async () => {
+                    const electron = (window as unknown as { electron?: { getDeepSeekCookies: () => Promise<unknown[]> } }).electron;
+                    if (!electron?.getDeepSeekCookies) return;
+                    try {
+                      const cookies = await electron.getDeepSeekCookies();
+                      const res = await fetch("/api/deepseek-cookies", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ cookies }),
+                      });
+                      if (res.ok) toast.success("Session saved. Others can sync with manager's session.");
+                      else toast.error("Failed to save session");
+                    } catch {
+                      toast.error("Failed to save session");
+                    }
+                  }}
+                  title="Sync with manager's session"
+                  aria-label="Save session"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
@@ -4285,7 +4382,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
         {/* Always mounted so closing/opening panel does not reload the page */}
         <webview
           ref={deepSeekWebViewRef}
-          src="https://chat.deepseek.com/"
+          src={deepSeekWebViewSrc}
           partition="persist:deepseek"
           className={cn(
             "w-full min-h-0 border-0",

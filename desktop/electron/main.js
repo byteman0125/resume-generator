@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain, clipboard, dialog } = require("electron");
+const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain, clipboard, dialog, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -313,4 +313,40 @@ ipcMain.handle("save-resume-temp", async (event, { buffer, fileName, profileName
     console.error("[ResumeCopy] main: Failed to save resume:", err);
     return null;
   }
+});
+
+// DeepSeek shared session: get/set cookies in partition persist:deepseek
+const DEEPSEEK_PARTITION = "persist:deepseek";
+const DEEPSEEK_URL = "https://chat.deepseek.com";
+
+ipcMain.handle("get-deepseek-cookies", async () => {
+  const ses = session.fromPartition(DEEPSEEK_PARTITION);
+  const list = await ses.cookies.get({ url: DEEPSEEK_URL });
+  return list;
+});
+
+ipcMain.handle("set-deepseek-cookies", async (_event, cookies) => {
+  const ses = session.fromPartition(DEEPSEEK_PARTITION);
+  const list = Array.isArray(cookies) ? cookies : [];
+  const existing = await ses.cookies.get({ url: DEEPSEEK_URL });
+  for (const c of existing) {
+    await ses.cookies.remove(DEEPSEEK_URL, c.name);
+  }
+  for (const c of list) {
+    const name = c && typeof c.name === "string" ? c.name : null;
+    const value = c && typeof c.value === "string" ? c.value : "";
+    if (!name) continue;
+    await ses.cookies.set({
+      url: DEEPSEEK_URL,
+      name,
+      value,
+      path: typeof c.path === "string" ? c.path : "/",
+      domain: typeof c.domain === "string" ? c.domain : undefined,
+      secure: c.secure === true,
+      httpOnly: c.httpOnly === true,
+      expirationDate: typeof c.expirationDate === "number" ? c.expirationDate : undefined,
+      sameSite: c.sameSite,
+    });
+  }
+  return { ok: true };
 });

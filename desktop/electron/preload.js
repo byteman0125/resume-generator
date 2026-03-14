@@ -9,4 +9,6 @@ contextBridge.exposeInMainWorld("electron", {
   getDefaultSavePath: () => ipcRenderer.invoke("get-default-save-path"),
   setDefaultSavePath: (dirPath) => ipcRenderer.invoke("set-default-save-path", dirPath),
   showSavePathDialog: () => ipcRenderer.invoke("show-save-path-dialog"),
+  getDeepSeekCookies: () => ipcRenderer.invoke("get-deepseek-cookies"),
+  setDeepSeekCookies: (cookies) => ipcRenderer.invoke("set-deepseek-cookies", cookies),
 });

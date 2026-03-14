@@ -93,6 +93,31 @@ export function setActiveProfileId(activeProfileId: string | null): void {
   db.prepare("INSERT INTO settings (key, value) VALUES ('activeProfileId', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(value);
 }
 
+// --- DeepSeek session cookies (shared; full Electron cookie objects) ---
+
+const DEEPSEEK_COOKIES_KEY = "deepseek_cookies";
+
+/** Full cookie object as returned by Electron session.cookies.get(). */
+export type DeepSeekCookie = Record<string, unknown>;
+
+export function getDeepSeekCookies(): DeepSeekCookie[] {
+  const row = db
+    .prepare<unknown[], { value: string }>("SELECT value FROM settings WHERE key = ?")
+    .get(DEEPSEEK_COOKIES_KEY);
+  if (!row?.value) return [];
+  try {
+    const parsed = JSON.parse(row.value) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setDeepSeekCookies(cookies: DeepSeekCookie[]): void {
+  const value = JSON.stringify(Array.isArray(cookies) ? cookies : []);
+  db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(DEEPSEEK_COOKIES_KEY, value);
+}
+
 // --- Profiles ---
 
 export interface ProfileRow {
