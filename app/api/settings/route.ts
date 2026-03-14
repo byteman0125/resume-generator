@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 import { getActiveProfileId, setActiveProfileId } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const activeProfileId = getActiveProfileId();
     return NextResponse.json({ activeProfileId });
   } catch (e) {
@@ -13,11 +18,18 @@ export async function GET() {
 
 export async function PATCH(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const body = await request.json();
-    const activeProfileId =
+    let activeProfileId =
       body.activeProfileId === null || body.activeProfileId === undefined
         ? null
         : String(body.activeProfileId);
+    if (user.role === "user" && activeProfileId !== null && activeProfileId !== user.assigned_profile_id) {
+      activeProfileId = user.assigned_profile_id;
+    }
     setActiveProfileId(activeProfileId);
     return NextResponse.json({ activeProfileId });
   } catch (e) {

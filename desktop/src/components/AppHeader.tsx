@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import { NavLink } from "react-router-dom";
-import { Briefcase, User, FileText, Sparkles, Sun, Moon, Save } from "lucide-react";
-import { getBackendIp, setBackendIp, getBaseUrl, BACKEND_PORT } from "../api";
+import { NavLink, useNavigate } from "react-router-dom";
+import { Briefcase, User, Users, FileText, Sparkles, Sun, Moon, LogOut, FolderOpen } from "lucide-react";
 import { cn } from "../lib/utils";
+import { useAuth } from "../lib/auth-context";
+import { getBaseUrl, getAuthToken } from "../api";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
+import { Button } from "./ui/button";
 
 const SERVER_CHECK_INTERVAL_MS = 10_000;
 
@@ -23,21 +26,35 @@ function useTheme() {
   return { theme, setTheme };
 }
 
-type NavItem = { path: string; label: string; icon: React.ReactNode };
+type NavItem = { path: string; label: string; icon: React.ReactNode; adminOnly?: boolean };
+
+function getElectronSavePathApi(): {
+  getDefaultSavePath: () => Promise<string>;
+  setDefaultSavePath: (path: string) => Promise<void>;
+  showSavePathDialog: () => Promise<string | null>;
+} | null {
+  const w = typeof window !== "undefined" ? (window as unknown as { electron?: unknown }) : undefined;
+  const e = w?.electron as { getDefaultSavePath?: () => Promise<string>; setDefaultSavePath?: (p: string) => Promise<void>; showSavePathDialog?: () => Promise<string | null> } | undefined;
+  if (e?.getDefaultSavePath && e?.setDefaultSavePath && e?.showSavePathDialog) return e as typeof e & { getDefaultSavePath: () => Promise<string>; setDefaultSavePath: (p: string) => Promise<void>; showSavePathDialog: () => Promise<string | null> };
+  return null;
+}
 
 export function AppHeader() {
   const { theme, setTheme } = useTheme();
-  const [ip, setIp] = useState("");
-  const [saved, setSaved] = useState(false);
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [fileSaveModalOpen, setFileSaveModalOpen] = useState(false);
+  const [savePath, setSavePath] = useState("");
   const [connected, setConnected] = useState(false);
-
-  useEffect(() => {
-    setIp(getBackendIp());
-  }, []);
+  const electronSavePath = getElectronSavePathApi();
 
   const checkServer = useCallback(async () => {
     try {
-      const res = await fetch(`${getBaseUrl()}/api/profiles`, { method: "GET" });
+      const token = getAuthToken();
+      const res = await fetch(`${getBaseUrl()}/api/auth/me`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       setConnected(res.ok);
     } catch {
       setConnected(false);
@@ -50,25 +67,38 @@ export function AppHeader() {
     return () => clearInterval(id);
   }, [checkServer]);
 
-  const handleSave = () => {
-    const trimmed = ip.trim() || "127.0.0.1";
-    const prev = getBackendIp().trim() || "127.0.0.1";
-    setBackendIp(trimmed);
-    setSaved(true);
-    checkServer();
-    setTimeout(() => setSaved(false), 2000);
-    // Reload so all data (profiles, applications) is fetched from the new server
-    if (prev !== trimmed) {
-      setTimeout(() => window.location.reload(), 600);
-    }
-  };
-
   const navItems: NavItem[] = [
     { path: "/profile", label: "Profile", icon: <User className="h-4 w-4" /> },
-    { path: "/template/format1", label: "Templates", icon: <FileText className="h-4 w-4" /> },
-    { path: "/ai", label: "AI", icon: <Sparkles className="h-4 w-4" /> },
+    { path: "/template/format1", label: "Templates", icon: <FileText className="h-4 w-4" />, adminOnly: true },
+    { path: "/ai", label: "AI", icon: <Sparkles className="h-4 w-4" />, adminOnly: true },
     { path: "/applications", label: "Application", icon: <Briefcase className="h-4 w-4" /> },
+    { path: "/users", label: "Users", icon: <Users className="h-4 w-4" />, adminOnly: true },
   ];
+
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || user?.role === "admin");
+
+  const handleLogout = () => {
+    logout();
+    setUserMenuOpen(false);
+    navigate("/", { replace: true });
+  };
+
+  const openFileSaveModal = useCallback(() => {
+    setUserMenuOpen(false);
+    if (electronSavePath) {
+      electronSavePath.getDefaultSavePath().then(setSavePath);
+      setFileSaveModalOpen(true);
+    }
+  }, [electronSavePath]);
+
+  const handleBrowseSavePath = useCallback(async () => {
+    if (!electronSavePath) return;
+    const chosen = await electronSavePath.showSavePathDialog();
+    if (chosen) {
+      await electronSavePath.setDefaultSavePath(chosen);
+      setSavePath(chosen);
+    }
+  }, [electronSavePath]);
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -86,7 +116,7 @@ export function AppHeader() {
           <span className="hidden sm:inline">Tailor</span>
         </NavLink>
         <div className="flex flex-1 items-center gap-1">
-          {navItems.map(({ path, label, icon }) => (
+          {visibleNavItems.map(({ path, label, icon }) => (
             <NavLink
               key={path}
               to={path}
@@ -103,7 +133,15 @@ export function AppHeader() {
             </NavLink>
           ))}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "inline-flex h-2 w-2 shrink-0 rounded-full",
+              connected ? "bg-green-500 dark:bg-green-400" : "bg-muted-foreground/60"
+            )}
+            title={connected ? "Server connected" : "Server disconnected"}
+            aria-label={connected ? "Server connected" : "Server disconnected"}
+          />
           <button
             type="button"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -112,37 +150,66 @@ export function AppHeader() {
           >
             {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
-          <span className="text-muted-foreground text-xs">Server</span>
-          <input
-            type="text"
-            value={ip}
-            onChange={(e) => setIp(e.target.value)}
-            placeholder="127.0.0.1 or https://..."
-            className="h-8 min-w-[8rem] max-w-[14rem] rounded-md border border-input bg-background px-2 text-sm font-mono"
-            onKeyDown={(e) => e.key === "Enter" && handleSave()}
-          />
-          {!ip.trim().includes("://") && <span className="text-muted-foreground text-xs">:{BACKEND_PORT}</span>}
-          <button
-            type="button"
-            onClick={handleSave}
-            className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 text-sm text-primary-foreground hover:bg-primary/90"
-          >
-            {saved ? "Saved" : <><Save className="h-3.5 w-3.5" /> Save</>}
-          </button>
-          <span
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border"
-            title={connected ? "Connected" : "Disconnected"}
-            aria-label={connected ? "Server connected" : "Server disconnected"}
-          >
-            <span
-              className={cn(
-                "h-2.5 w-2.5 rounded-full",
-                connected ? "bg-green-500 dark:bg-green-400" : "bg-muted-foreground/50"
-              )}
-            />
-          </span>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setUserMenuOpen((o) => !o)}
+              className="inline-flex items-center gap-2 rounded-full px-2 py-1.5 text-sm hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            >
+              <span
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-semibold"
+                aria-hidden
+              >
+                {(user?.username ?? "U").charAt(0).toUpperCase()}
+              </span>
+              <span className="text-muted-foreground">{user?.username ?? "User"}</span>
+            </button>
+            {userMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" aria-hidden onClick={() => setUserMenuOpen(false)} />
+                <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-md border bg-popover py-1 shadow-md">
+                  {electronSavePath && (
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
+                      onClick={openFileSaveModal}
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                      File save
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent"
+                    onClick={handleLogout}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    Log out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
+      <Dialog open={fileSaveModalOpen} onOpenChange={setFileSaveModalOpen}>
+        <DialogContent noZoomAnimation className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>File save location</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">Resume PDFs and copied files will be saved to this folder.</p>
+          <div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-sm break-all">
+            {savePath || "—"}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleBrowseSavePath}>
+              <FolderOpen className="h-4 w-4 mr-2" />
+              Browse
+            </Button>
+            <Button onClick={() => setFileSaveModalOpen(false)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </nav>
   );
 }

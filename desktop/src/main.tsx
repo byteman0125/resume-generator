@@ -1,20 +1,49 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
-import { App } from "./App";
-import { getBaseUrl } from "./api";
+import { AppWithProviders } from "./App";
+import { getBaseUrl, getAuthToken, clearAuthToken } from "./api";
 import { ErrorBoundary } from "./ErrorBoundary";
 import "./index.css";
 
-/** Patch fetch so relative URLs (e.g. /api/...) go to the configured backend. */
+/** Patch fetch: send relative URLs to backend, add Bearer token, and on 401 clear auth and notify. */
 try {
   const originalFetch = window.fetch;
   window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    let fullUrl = url;
+    let newInit = init;
     if (url.startsWith("/") && !url.startsWith("//")) {
-      const full = getBaseUrl() + url;
-      const newInput = typeof input === "string" ? full : input instanceof Request ? new Request(full, input) : full;
-      return originalFetch.call(this, newInput, init);
+      fullUrl = getBaseUrl() + url;
+      const token = getAuthToken();
+      if (token) {
+        const prev = init?.headers;
+        const next =
+          prev instanceof Headers
+            ? (() => {
+                const h = new Headers(prev);
+                h.set("Authorization", `Bearer ${token}`);
+                return h;
+              })()
+            : prev && typeof prev === "object" && !(prev instanceof Headers)
+              ? { ...(prev as Record<string, string>), Authorization: `Bearer ${token}` }
+              : { Authorization: `Bearer ${token}` };
+        newInit = { ...init, headers: next };
+      }
+      const request =
+        typeof input === "string" ? fullUrl : input instanceof Request ? new Request(fullUrl, input) : fullUrl;
+      return originalFetch.call(this, request, newInit).then((res) => {
+        if (
+          res.status === 401 &&
+          fullUrl.includes("/api/") &&
+          !fullUrl.includes("/api/auth/login") &&
+          !fullUrl.includes("/api/auth/setup-status")
+        ) {
+          clearAuthToken();
+          window.dispatchEvent(new CustomEvent("auth:401"));
+        }
+        return res;
+      });
     }
     return originalFetch.call(this, input, init);
   };
@@ -28,7 +57,7 @@ if (root) {
     <React.StrictMode>
       <ErrorBoundary>
         <BrowserRouter>
-          <App />
+          <AppWithProviders />
         </BrowserRouter>
       </ErrorBoundary>
     </React.StrictMode>

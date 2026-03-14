@@ -2,13 +2,21 @@ import { NextResponse } from "next/server";
 import { chromium } from "playwright";
 import { getProfile } from "@/lib/db";
 import type { ResumeData } from "@/lib/resume-store";
+import { requireUser } from "@/lib/auth";
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
+    if (user.role === "user" && id !== user.assigned_profile_id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const row = getProfile(id);
     if (!row) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 });

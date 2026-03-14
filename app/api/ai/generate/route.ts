@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/auth";
 
 type Mode = "bulletsCurrent" | "bulletsLast" | "summary" | "skills" | "extractCoreContext";
 
@@ -186,6 +187,13 @@ function buildExtractionPrompt(jobDescription: string): { prompt: string; error?
 
 export async function POST(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (user.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const body = (await request.json()) as GenerateRequestBody & {
       // Optional: when re-running later steps client can send already-generated bullets.
       generatedBullets?: { current: string; last: string };

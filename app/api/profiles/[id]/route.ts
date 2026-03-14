@@ -1,12 +1,20 @@
 import { NextResponse } from "next/server";
 import { getProfile, updateProfile, deleteProfile } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
+    if (user.role === "user" && id !== user.assigned_profile_id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const profile = getProfile(id);
     if (!profile) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 });
@@ -30,7 +38,14 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
+    if (user.role === "user" && id !== user.assigned_profile_id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const body = await request.json();
     const updates: { name?: string; data?: unknown } = {};
     if (typeof body.name === "string") updates.name = body.name.trim();
@@ -56,11 +71,18 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
+    if (user.role === "user" && id !== user.assigned_profile_id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     deleteProfile(id);
     return NextResponse.json({ ok: true });
   } catch (e) {

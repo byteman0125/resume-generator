@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { listProfiles, createProfile, reorderProfiles, type ProfileRow } from "@/lib/db";
+import { listProfiles, createProfile, reorderProfiles, getProfile, type ProfileRow } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 import { defaultResumeData, type ResumeData } from "@/lib/resume-store";
 
 function formatPeriod(start: string, end: string, current: boolean): string {
@@ -44,9 +45,21 @@ function profileSummary(row: ProfileRow) {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const profiles = listProfiles();
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const profiles =
+      user.role === "admin"
+        ? listProfiles()
+        : user.assigned_profile_id
+          ? (() => {
+              const p = getProfile(user.assigned_profile_id);
+              return p ? [p] : [];
+            })()
+          : [];
     return NextResponse.json(
       profiles.map((p) => ({
         id: p.id,
@@ -64,6 +77,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const body = await request.json();
     const name = typeof body.name === "string" ? body.name.trim() || "Untitled" : "Untitled";
     const profile = createProfile(name, body.data ?? defaultResumeData);
@@ -81,6 +98,10 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const body = await request.json();
     const orderedIds = body?.orderedIds;
     if (!Array.isArray(orderedIds) || orderedIds.some((id: unknown) => typeof id !== "string")) {

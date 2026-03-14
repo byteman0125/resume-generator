@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { getJobApplication, updateJobApplication } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 
 const JOB_PDFS_DIR = path.join(process.cwd(), "data", "job-pdfs");
 
@@ -16,15 +17,27 @@ function getPdfPath(id: string) {
   return path.join(JOB_PDFS_DIR, `${id}.pdf`);
 }
 
+function userCanAccessProfile(user: { role: string; assigned_profile_id: string | null }, profileId: string | null): boolean {
+  if (user.role === "admin") return true;
+  return profileId !== null && profileId === user.assigned_profile_id;
+}
+
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
     const row = getJobApplication(id);
     if (!row) {
       return NextResponse.json({ error: "Job application not found" }, { status: 404 });
+    }
+    if (!userCanAccessProfile(user, row.profile_id)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const filePath = getPdfPath(id);
     if (!fs.existsSync(filePath)) {
@@ -53,10 +66,17 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
     const row = getJobApplication(id);
     if (!row) {
       return NextResponse.json({ error: "Job application not found" }, { status: 404 });
+    }
+    if (!userCanAccessProfile(user, row.profile_id)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const buffer = await request.arrayBuffer();
     if (!buffer || buffer.byteLength === 0) {

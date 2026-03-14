@@ -1,11 +1,22 @@
 import { NextResponse } from "next/server";
 import { listJobApplications, createJobApplication } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { searchParams } = new URL(request.url);
-    const profileId = searchParams.get("profile_id");
-    const rows = listJobApplications(profileId ?? undefined);
+    const profileId =
+      user.role === "admin"
+        ? searchParams.get("profile_id") ?? undefined
+        : user.assigned_profile_id ?? undefined;
+    if (user.role === "user" && !profileId) {
+      return NextResponse.json([], { status: 200 });
+    }
+    const rows = listJobApplications(profileId);
     return NextResponse.json(rows);
   } catch (e) {
     console.error(e);
@@ -18,6 +29,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const body = await request.json();
     let date: string;
     if ("date" in body) {
@@ -32,8 +47,11 @@ export async function POST(request: Request) {
     const title = typeof body.title === "string" ? body.title.trim() : "";
     const job_url =
       typeof body.job_url === "string" ? body.job_url.trim() || null : null;
-    const profile_id =
+    let profile_id =
       typeof body.profile_id === "string" ? body.profile_id || null : null;
+    if (user.role === "user") {
+      profile_id = user.assigned_profile_id;
+    }
     // Allow explicit "" so new row has empty resume file cell (no auto-fill).
     const resume_file_name =
       typeof body.resume_file_name === "string" ? body.resume_file_name.trim() : null;

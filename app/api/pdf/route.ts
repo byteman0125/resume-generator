@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { chromium } from "playwright";
 import { setPdfData, createToken, clearExpiredPdfCache } from "@/lib/pdf-cache";
+import { requireUser } from "@/lib/auth";
 import {
   LETTER_VIEWPORT,
   LETTER_VIEWPORT_TALL_HEIGHT,
@@ -13,6 +14,10 @@ import type { ResumeData } from "@/lib/resume-store";
 
 export async function POST(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const body = await request.json();
     const data = body?.data as ResumeData | undefined;
     const templateId = typeof body?.templateId === "string" ? body.templateId.trim() || undefined : undefined;

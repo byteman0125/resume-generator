@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
+import { requireUser } from "@/lib/auth";
 
 type Prompts = {
   summary: string;
@@ -45,8 +46,15 @@ function readPrompts(): Prompts {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (user.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const prompts = readPrompts();
     return NextResponse.json(prompts);
   } catch (e) {
@@ -57,6 +65,13 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (user.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const body = (await request.json()) as Partial<Prompts>;
     const current = readPrompts();
     const next: Prompts = {

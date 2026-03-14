@@ -26,6 +26,33 @@
     --radius: 0.5rem;
   }
 
+  /* Landing page: indigo/violet, polished */
+  .landing-page {
+    --lp-bg: 240 20% 98%;
+    --lp-bg-end: 250 25% 94%;
+    --lp-fg: 240 18% 14%;
+    --lp-muted: 240 10% 40%;
+    --lp-accent: 262 72% 48%;
+    --lp-accent-deep: 262 72% 38%;
+    --lp-accent-soft: 262 45% 94%;
+    --lp-card: 0 0% 100%;
+    --lp-card-border: 240 15% 90%;
+    --lp-grid: 240 18% 14%;
+  }
+  .landing-page.dark,
+  .dark .landing-page {
+    --lp-bg: 240 22% 8%;
+    --lp-bg-end: 250 20% 11%;
+    --lp-fg: 240 15% 96%;
+    --lp-muted: 240 10% 62%;
+    --lp-accent: 263 70% 58%;
+    --lp-accent-deep: 262 65% 45%;
+    --lp-accent-soft: 262 35% 18%;
+    --lp-card: 240 18% 11%;
+    --lp-card-border: 240 15% 20%;
+    --lp-grid: 240 15% 96%;
+  }
+
   .dark {
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;

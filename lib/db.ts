@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS job_links (
   check_result TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('admin','user')),
+  assigned_profile_id TEXT,
+  start_date TEXT,
+  created_at TEXT NOT NULL
+);
 `);
 
 function genId(): string {
@@ -572,4 +582,169 @@ export function updateJobLink(
 
 export function deleteJobLink(id: string): void {
   db.prepare("DELETE FROM job_links WHERE id = ?").run(id);
+}
+
+// --- Users (auth + RBAC) ---
+
+export type UserRole = "admin" | "user";
+
+export interface UserRow {
+  id: string;
+  username: string;
+  password_hash: string;
+  role: UserRole;
+  assigned_profile_id: string | null;
+  start_date: string | null;
+  created_at: string;
+}
+
+export function hasAnyUser(): boolean {
+  const row = db.prepare<unknown[], { c: number }>("SELECT COUNT(*) AS c FROM users").get();
+  return row ? (row as { c: number }).c > 0 : false;
+}
+
+export function getUserByUsername(username: string): UserRow | undefined {
+  const row = db
+    .prepare<
+      unknown[],
+      {
+        id: string;
+        username: string;
+        password_hash: string;
+        role: string;
+        assigned_profile_id: string | null;
+        start_date: string | null;
+        created_at: string;
+      }
+    >(
+      "SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at FROM users WHERE username = ?"
+    )
+    .get(username.trim().toLowerCase());
+  if (!row) return undefined;
+  return {
+    ...row,
+    role: row.role as UserRole,
+  };
+}
+
+export function getUserById(id: string): UserRow | undefined {
+  const row = db
+    .prepare<
+      unknown[],
+      {
+        id: string;
+        username: string;
+        password_hash: string;
+        role: string;
+        assigned_profile_id: string | null;
+        start_date: string | null;
+        created_at: string;
+      }
+    >(
+      "SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at FROM users WHERE id = ?"
+    )
+    .get(id);
+  if (!row) return undefined;
+  return {
+    ...row,
+    role: row.role as UserRole,
+  };
+}
+
+export function listUsers(): (UserRow & { application_count: number })[] {
+  const rows = db
+    .prepare<
+      unknown[],
+      {
+        id: string;
+        username: string;
+        password_hash: string;
+        role: string;
+        assigned_profile_id: string | null;
+        start_date: string | null;
+        created_at: string;
+      }
+    >("SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at FROM users ORDER BY created_at ASC")
+    .all();
+  const counts = db
+    .prepare<unknown[], { profile_id: string; c: number }>(
+      "SELECT profile_id, COUNT(*) AS c FROM job_applications WHERE profile_id IS NOT NULL AND profile_id != '' GROUP BY profile_id"
+    )
+    .all() as { profile_id: string; c: number }[];
+  const countByProfile = new Map(counts.map((r) => [r.profile_id, r.c]));
+  return rows.map((r) => ({
+    ...r,
+    role: r.role as UserRole,
+    application_count: r.assigned_profile_id ? countByProfile.get(r.assigned_profile_id) ?? 0 : 0,
+  }));
+}
+
+export function getApplicationCountByProfileId(profileId: string): number {
+  const row = db
+    .prepare<unknown[], { c: number }>("SELECT COUNT(*) AS c FROM job_applications WHERE profile_id = ?")
+    .get(profileId);
+  return row ? (row as { c: number }).c : 0;
+}
+
+export function createUser(params: {
+  username: string;
+  password_hash: string;
+  role: UserRole;
+  assigned_profile_id?: string | null;
+  start_date?: string | null;
+}): UserRow {
+  const id = genId();
+  const username = params.username.trim().toLowerCase();
+  const now = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO users (id, username, password_hash, role, assigned_profile_id, start_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(
+    id,
+    username,
+    params.password_hash,
+    params.role,
+    params.assigned_profile_id ?? null,
+    params.start_date ?? null,
+    now
+  );
+  const row = getUserById(id)!;
+  return row;
+}
+
+export function updateUser(
+  id: string,
+  updates: {
+    username?: string;
+    role?: UserRole;
+    assigned_profile_id?: string | null;
+    start_date?: string | null;
+  }
+): UserRow {
+  const existing = getUserById(id);
+  if (!existing) throw new Error("User not found");
+  const username = updates.username !== undefined ? updates.username.trim().toLowerCase() : existing.username;
+  const role = updates.role ?? existing.role;
+  const assigned_profile_id = updates.assigned_profile_id !== undefined ? updates.assigned_profile_id : existing.assigned_profile_id;
+  const start_date = updates.start_date !== undefined ? updates.start_date : existing.start_date;
+  db.prepare("UPDATE users SET username = ?, role = ?, assigned_profile_id = ?, start_date = ? WHERE id = ?").run(
+    username,
+    role,
+    assigned_profile_id,
+    start_date,
+    id
+  );
+  return getUserById(id)!;
+}
+
+export function updateUserPassword(id: string, password_hash: string): void {
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(password_hash, id);
+}
+
+export function deleteUser(id: string): void {
+  db.prepare("DELETE FROM users WHERE id = ?").run(id);
+}
+
+export function countAdminUsers(): number {
+  const row = db.prepare<unknown[], { c: number }>("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'").get();
+  return row ? (row as { c: number }).c : 0;
 }

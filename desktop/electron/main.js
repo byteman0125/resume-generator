@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain, clipboard } = require("electron");
+const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain, clipboard, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -217,7 +217,60 @@ function setWindowsClipboardFile(absolutePath) {
   });
 }
 
-// Save resume PDF to Downloads and (on Windows) put file on clipboard so Ctrl+V pastes the file.
+// Default file save path: stored in userData/settings.json; fallback = Downloads
+const SETTINGS_FILE = path.join(app.getPath("userData"), "settings.json");
+function getDefaultSavePath() {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const raw = fs.readFileSync(SETTINGS_FILE, "utf8");
+      const data = JSON.parse(raw);
+      if (typeof data.defaultSavePath === "string" && data.defaultSavePath.trim()) {
+        return data.defaultSavePath.trim();
+      }
+    }
+  } catch (_) {}
+  return app.getPath("downloads");
+}
+function setDefaultSavePath(dirPath) {
+  try {
+    const dir = path.dirname(SETTINGS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    let data = {};
+    if (fs.existsSync(SETTINGS_FILE)) {
+      try {
+        data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+      } catch (_) {}
+    }
+    data.defaultSavePath = dirPath;
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) {
+    console.error("Failed to save default save path:", err);
+  }
+}
+ipcMain.handle("get-default-save-path", () => getDefaultSavePath());
+ipcMain.handle("set-default-save-path", (event, dirPath) => {
+  if (typeof dirPath === "string" && dirPath.trim()) {
+    setDefaultSavePath(dirPath.trim());
+  }
+});
+ipcMain.handle("show-save-path-dialog", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win || null, {
+    properties: ["openDirectory"],
+    title: "Choose folder for saving files",
+  });
+  if (canceled || !filePaths || filePaths.length === 0) return null;
+  return filePaths[0] || null;
+});
+
+// Cross-platform: never mkdir a filesystem/drive root (Windows E:\, Unix /).
+function isPathRoot(dir) {
+  const resolved = path.resolve(dir);
+  const { root } = path.parse(resolved);
+  return resolved === root || resolved === root.replace(/\/$/, "");
+}
+
+// Save resume PDF to default save folder (or Downloads) and (on Windows) put file on clipboard so Ctrl+V pastes the file.
 ipcMain.handle("save-resume-temp", async (event, { buffer, fileName, profileName }) => {
   console.log("[ResumeCopy] main: save-resume-temp called", { fileName, profileName, bufferLength: buffer?.byteLength ?? buffer?.length });
   try {
@@ -231,10 +284,12 @@ ipcMain.handle("save-resume-temp", async (event, { buffer, fileName, profileName
       ((fileName || "").toString().trim() &&
         (fileName || "").toString().trim().replace(/[<>:"/\\|?*]/g, "_").slice(0, 200)) ||
       `${safeBase}.pdf`;
-    const dir = path.join(app.getPath("downloads"), ".");
+    const dir = path.join(getDefaultSavePath(), ".");
     const filePath = path.join(dir, finalName);
     console.log("[ResumeCopy] main: saving to", filePath);
-    fs.mkdirSync(dir, { recursive: true });
+    if (!isPathRoot(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
     fs.writeFileSync(filePath, buf);
 
     // Set clipboard: on Windows use PowerShell + .NET so Ctrl+V pastes the file (like File Explorer).

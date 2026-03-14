@@ -2,6 +2,7 @@
 export const BACKEND_PORT = 3000;
 
 const STORAGE_KEY = "resume-builder-desktop-backend-ip";
+const AUTH_TOKEN_KEY = "resume-builder-desktop-auth-token";
 
 export function getBackendIp(): string {
   if (typeof window === "undefined") return "127.0.0.1";
@@ -26,6 +27,21 @@ export function getBaseUrl(): string {
     return base;
   }
   return `http://${raw}:${BACKEND_PORT}`;
+}
+
+export function getAuthToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+export function setAuthToken(token: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+export function clearAuthToken(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(AUTH_TOKEN_KEY);
 }
 
 /** URL for the content view (BrowserView). Adds ?embedded=1 so Next.js hides its header. */

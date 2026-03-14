@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useResume, type ProfileMeta } from "@/lib/resume-context";
+import { useAuth } from "../lib/auth-context";
 import { normalizeCompanyForDuplicateKey } from "@/lib/normalize-company";
 import { defaultResumeData, APPLICATION_RESUME_STYLE, type Experience, type ResumeData, type StoredProfileData } from "@/lib/resume-store";
 import { FORMAT_LIST, formatIdToTemplateId, type FormatId } from "@/lib/template-format";
@@ -418,6 +419,7 @@ async function writeTextToClipboard(text: string): Promise<void> {
 }
 
 export function JobApplicationsView() {
+  const { user } = useAuth();
   const { profiles, currentProfileId } = useResume();
   const [applications, setApplications] = useState<RowItem[]>([]);
   /** Duplicate keys from backend (profile_id::company_lower) for red highlight */
@@ -756,6 +758,12 @@ export function JobApplicationsView() {
     return "";
   });
 
+  /** For user role, only their assigned profile is allowed. */
+  const effectiveProfileFilterId =
+    user?.role === "user" && user.assignedProfileId
+      ? user.assignedProfileId
+      : profileFilterId;
+
   /** Applications for the selected profile (loaded from backend; no client-side filter). */
   const dataRows = useMemo<RowItem[]>(() => applications, [applications]);
 
@@ -780,12 +788,17 @@ export function JobApplicationsView() {
   }, [dataRows]);
 
   useEffect(() => {
+    if (user?.role === "user" && user.assignedProfileId) {
+      setProfileFilterId(user.assignedProfileId);
+      if (typeof window !== "undefined") sessionStorage.setItem(PROFILE_FILTER_STORAGE_KEY, user.assignedProfileId);
+      return;
+    }
     if (!profileFilterId && profiles.length > 0) {
       const firstId = profiles[0]!.id;
       setProfileFilterId(firstId);
       if (typeof window !== "undefined") sessionStorage.setItem(PROFILE_FILTER_STORAGE_KEY, firstId);
     }
-  }, [profileFilterId, profiles]);
+  }, [user?.role, user?.assignedProfileId, profileFilterId, profiles]);
 
   // When the selected profile is deleted, switch to first available profile
   useEffect(() => {
@@ -842,13 +855,13 @@ export function JobApplicationsView() {
   }, []);
 
   useEffect(() => {
-    if (profileFilterId) {
-      fetchApplications(profileFilterId);
+    if (effectiveProfileFilterId) {
+      fetchApplications(effectiveProfileFilterId);
     } else {
       setApplications([]);
       setLoading(false);
     }
-  }, [profileFilterId, fetchApplications]);
+  }, [effectiveProfileFilterId, fetchApplications]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -1389,7 +1402,7 @@ export function JobApplicationsView() {
         } catch (e) {
           console.error("Undo (revert edits in DB) failed:", e);
           setHistory((prev) => prev.slice(0, -1));
-          fetchApplications(profileFilterId);
+          fetchApplications(effectiveProfileFilterId);
           return;
         }
       }
@@ -1409,7 +1422,7 @@ export function JobApplicationsView() {
       } catch (e) {
         console.error("Undo (remove added row from DB) failed:", e);
         setHistory((prev) => prev.slice(0, -1));
-        fetchApplications(profileFilterId);
+        fetchApplications(effectiveProfileFilterId);
         return;
       }
     }
@@ -1453,9 +1466,9 @@ export function JobApplicationsView() {
     } catch (e) {
       console.error("Undo (restore to DB) failed:", e);
       setHistory((prev) => prev.slice(0, -1));
-      fetchApplications(profileFilterId);
+      fetchApplications(effectiveProfileFilterId);
     }
-  }, [history, applications, profileFilterId, fetchApplications, fetchDuplicateKeys]);
+  }, [history, applications, effectiveProfileFilterId, fetchApplications, fetchDuplicateKeys]);
 
   const handleRedo = useCallback(async () => {
     if (!future.length) return;
@@ -1611,14 +1624,14 @@ export function JobApplicationsView() {
   // Reset scroll restore when profile changes so we can scroll to last row after new data loads
   useEffect(() => {
     hasRestoredScrollAndSelectionRef.current = false;
-    if (typeof window !== "undefined" && profileFilterId) {
+    if (typeof window !== "undefined" && effectiveProfileFilterId) {
       try {
         sessionStorage.removeItem(SCROLL_STORAGE_KEY);
       } catch {
         // ignore
       }
     }
-  }, [profileFilterId]);
+  }, [effectiveProfileFilterId]);
 
   // Restore scroll position and selection after load, or scroll to last row when no saved position
   useEffect(() => {
@@ -2420,7 +2433,7 @@ export function JobApplicationsView() {
   const createEmptyRowAt = useCallback(
     async (insertIndex: number, row: number, col: number, colKey: ColumnKey, initialValue: string) => {
       try {
-        const profileId = profileFilterId || null;
+        const profileId = effectiveProfileFilterId || null;
         const res = await fetch("/api/job-applications", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2477,7 +2490,7 @@ export function JobApplicationsView() {
         console.error("Failed to create empty application row:", err);
       }
     },
-    [setApplications, pushHistory, setEditingCell, setSelectedRange, queueScrollCellIntoView, profileFilterId]
+    [setApplications, pushHistory, setEditingCell, setSelectedRange, queueScrollCellIntoView, effectiveProfileFilterId]
   );
 
   const handleTableKeyDown = useCallback(
@@ -2837,7 +2850,7 @@ export function JobApplicationsView() {
           )
         );
         if (results.some((r) => !r.ok)) {
-          fetchApplications(profileFilterId);
+          fetchApplications(effectiveProfileFilterId);
           toast.error("Delete failed");
         } else {
           void fetchDuplicateKeys();
@@ -2845,11 +2858,11 @@ export function JobApplicationsView() {
         }
       } catch (e) {
         console.error(e);
-        fetchApplications(profileFilterId);
+        fetchApplications(effectiveProfileFilterId);
         toast.error("Delete failed");
       }
     },
-    [dataRows, pushHistory, fetchDuplicateKeys, profileFilterId, fetchApplications]
+    [dataRows, pushHistory, fetchDuplicateKeys, effectiveProfileFilterId, fetchApplications]
   );
 
   const handleTablePaste = useCallback(
@@ -2942,7 +2955,7 @@ export function JobApplicationsView() {
             });
           }
           try {
-            const profileId = profileFilterId || null;
+            const profileId = effectiveProfileFilterId || null;
             const res = await fetch("/api/job-applications", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -2964,7 +2977,7 @@ export function JobApplicationsView() {
       void fetchDuplicateKeys();
       if (rowIndices.length > 0) toast.success(`Pasted ${rowIndices.length} row(s)`);
     },
-    [applications, pushHistory, dataRows, showEmptyRows, fetchDuplicateKeys, profileFilterId]
+    [applications, pushHistory, dataRows, showEmptyRows, fetchDuplicateKeys, effectiveProfileFilterId]
   );
 
   const handleBulkGptGenerate = useCallback(
@@ -3127,23 +3140,27 @@ export function JobApplicationsView() {
                     <ChevronDown className="h-2.5 w-2.5" />
                   </Button>
                 </div>
-                <span className="text-xs text-muted-foreground shrink-0">Profile:</span>
-                <select
-                  className="h-7 text-xs border border-input rounded px-2 bg-background"
-                  value={profileFilterId}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                    const id = e.target.value;
-                    setProfileFilterId(id);
-                    if (typeof window !== "undefined") sessionStorage.setItem(PROFILE_FILTER_STORAGE_KEY, id);
-                  }}
-                  aria-label="View table by profile"
-                >
-                  {profiles.map((p: ProfileMeta) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+                {user?.role !== "user" && (
+                  <>
+                    <span className="text-xs text-muted-foreground shrink-0">Profile:</span>
+                    <select
+                      className="h-7 text-xs border border-input rounded px-2 bg-background"
+                      value={effectiveProfileFilterId}
+                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                        const id = e.target.value;
+                        setProfileFilterId(id);
+                        if (typeof window !== "undefined") sessionStorage.setItem(PROFILE_FILTER_STORAGE_KEY, id);
+                      }}
+                      aria-label="View table by profile"
+                    >
+                      {profiles.map((p: ProfileMeta) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Resume style:</span>
                   <select
@@ -3193,7 +3210,7 @@ export function JobApplicationsView() {
                   </Button>
                 </div>
               </div>
-              {profileFilterId && dataRows.length === 0 && (
+              {effectiveProfileFilterId && dataRows.length === 0 && (
                 <div className="flex-shrink-0 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
                   No applications for this profile yet. Double-click any cell in the empty rows below to add one, or paste from clipboard.
                 </div>
@@ -3983,7 +4000,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                               onDoubleClick={async () => {
                                 if (!isEditableCol) return;
                                 try {
-                                  const profileId = profileFilterId || null;
+                                  const profileId = effectiveProfileFilterId || null;
                                   const insertIndex = dataRows.length + i;
                                   const res = await fetch("/api/job-applications", {
                                     method: "POST",

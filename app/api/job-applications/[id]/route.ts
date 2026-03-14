@@ -6,6 +6,7 @@ import {
   updateJobApplication,
   deleteJobApplication,
 } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 
 const JOB_PDFS_DIR = path.join(process.cwd(), "data", "job-pdfs");
 
@@ -16,11 +17,20 @@ function deleteJobPdfIfExists(id: string): void {
   }
 }
 
+function userCanAccessProfile(user: { role: string; assigned_profile_id: string | null }, profileId: string | null): boolean {
+  if (user.role === "admin") return true;
+  return profileId !== null && profileId === user.assigned_profile_id;
+}
+
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
     const row = getJobApplication(id);
     if (!row) {
@@ -28,6 +38,9 @@ export async function GET(
         { error: "Job application not found" },
         { status: 404 }
       );
+    }
+    if (!userCanAccessProfile(user, row.profile_id)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     return NextResponse.json(row);
   } catch (e) {
@@ -44,7 +57,18 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
+    const existing = getJobApplication(id);
+    if (!existing) {
+      return NextResponse.json({ error: "Job application not found" }, { status: 404 });
+    }
+    if (!userCanAccessProfile(user, existing.profile_id)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const body = await request.json();
     const updates: {
       date?: string;
@@ -66,7 +90,9 @@ export async function PATCH(
         typeof body.job_url === "string" ? body.job_url.trim() || null : null;
     if ("profile_id" in body)
       updates.profile_id =
-        typeof body.profile_id === "string" ? body.profile_id || null : null;
+        user.role === "admin"
+          ? (typeof body.profile_id === "string" ? body.profile_id || null : null)
+          : user.assigned_profile_id;
     if (typeof body.resume_file_name === "string")
       updates.resume_file_name = body.resume_file_name.trim() || null;
     if ("job_description" in body)
@@ -94,11 +120,22 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = requireUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
+    const existing = getJobApplication(id);
+    if (!existing) {
+      return NextResponse.json({ error: "Job application not found" }, { status: 404 });
+    }
+    if (!userCanAccessProfile(user, existing.profile_id)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     deleteJobPdfIfExists(id);
     deleteJobApplication(id);
     return NextResponse.json({ ok: true });
