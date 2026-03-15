@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/table";
 import { useResume, type ProfileMeta } from "@/lib/resume-context";
 import { useAuth } from "../lib/auth-context";
+import { useStatus } from "../lib/status-context";
 import { normalizeCompanyForDuplicateKey } from "@/lib/normalize-company";
 import { defaultResumeData, APPLICATION_RESUME_STYLE, type Experience, type ResumeData, type StoredProfileData } from "@/lib/resume-store";
 import { FORMAT_LIST, formatIdToTemplateId, type FormatId } from "@/lib/template-format";
@@ -420,6 +421,7 @@ async function writeTextToClipboard(text: string): Promise<void> {
 
 export function JobApplicationsView() {
   const { user } = useAuth();
+  const { setStatus } = useStatus();
   const { profiles, currentProfileId } = useResume();
   const [applications, setApplications] = useState<RowItem[]>([]);
   /** Duplicate keys from backend (profile_id::company_lower) for red highlight */
@@ -4332,6 +4334,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                   onClick={async () => {
                     const electron = (window as unknown as { electron?: { getDeepSeekCookies: () => Promise<unknown[]> } }).electron;
                     if (!electron?.getDeepSeekCookies) return;
+                    setStatus("Saving session…");
                     try {
                       const cookies = await electron.getDeepSeekCookies();
                       const res = await fetch("/api/deepseek-cookies", {
@@ -4339,9 +4342,15 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ cookies }),
                       });
-                      if (res.ok) toast.success("Session saved. Others can sync with manager's session.");
-                      else toast.error("Failed to save session");
+                      if (res.ok) {
+                        setStatus("Session saved. Others can sync with manager's session.");
+                        toast.success("Session saved. Others can sync with manager's session.");
+                      } else {
+                        setStatus("Failed to save session");
+                        toast.error("Failed to save session");
+                      }
                     } catch {
+                      setStatus("Failed to save session");
                       toast.error("Failed to save session");
                     }
                   }}
