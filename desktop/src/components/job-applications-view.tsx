@@ -484,6 +484,7 @@ export function JobApplicationsView() {
   const toggleDeepSeekPanel = useCallback(() => {
     setDeepSeekPanelOpen((prev) => {
       const next = !prev;
+      if (!next) deepSeekCookiesLoadedFromDbRef.current = false;
       try {
         localStorage.setItem(DEEPSEEK_PANEL_KEY, String(next));
       } catch {}
@@ -491,13 +492,13 @@ export function JobApplicationsView() {
     });
   }, []);
   const deepSeekWebViewRef = useRef<HTMLElement | null>(null);
+  const deepSeekCookiesLoadedFromDbRef = useRef(false);
+  const deepSeekInvalidRetryCountRef = useRef(0);
+  const DEEPSEEK_MAX_RETRIES = 3;
   const isDesktopDeepSeekSync = typeof window !== "undefined" && !!(window as unknown as { electron?: { setDeepSeekCookies?: unknown } }).electron?.setDeepSeekCookies;
   const [deepSeekWebViewSrc, setDeepSeekWebViewSrc] = useState<string>(() =>
     isDesktopDeepSeekSync ? "about:blank" : "https://chat.deepseek.com/"
   );
-  const deepSeekCookiesLoadedFromDbRef = useRef(false);
-  const deepSeekInvalidRetryCountRef = useRef(0);
-  const DEEPSEEK_MAX_RETRIES = 3;
 
   /** First-time load: fetch cookies from API, inject into partition, then set webview src (desktop only, no flash). */
   useEffect(() => {
@@ -519,6 +520,11 @@ export function JobApplicationsView() {
         if (cancelled) return;
         deepSeekCookiesLoadedFromDbRef.current = true;
         setDeepSeekWebViewSrc("https://chat.deepseek.com/");
+        if (cookies.length > 0) {
+          const wv = deepSeekWebViewRef.current as unknown as { reload?: () => void };
+          const reload = wv?.reload;
+          if (typeof reload === "function") setTimeout(() => reload(), 50);
+        }
       } catch {
         if (!cancelled) {
           deepSeekCookiesLoadedFromDbRef.current = true;

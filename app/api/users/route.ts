@@ -34,8 +34,7 @@ function isOnline(lastSeenAt: string | null): boolean {
 export async function GET(request: Request) {
   try {
     const r = requireActiveUser(request);
-    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    if ("status" in r) return NextResponse.json({ error: r.status === 403 ? "Account inactive" : "Unauthorized" }, { status: r.status });
     const user = r.user;
     if (user.role !== "admin") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -67,8 +66,7 @@ export async function POST(request: Request) {
     const hasUsers = hasAnyUser();
     if (hasUsers) {
       const r = requireActiveUser(request);
-      if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+      if ("status" in r) return NextResponse.json({ error: r.status === 403 ? "Account inactive" : "Unauthorized" }, { status: r.status });
       const user = r.user;
       if (user.role !== "admin") {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });

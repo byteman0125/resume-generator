@@ -5,8 +5,7 @@ import { requireActiveUser } from "@/lib/auth";
 export async function GET(request: Request) {
   try {
     const r = requireActiveUser(request);
-    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    if ("status" in r) return NextResponse.json({ error: r.status === 403 ? "Account inactive" : "Unauthorized" }, { status: r.status });
     const user = r.user;
     const activeProfileId = getActiveProfileId();
     return NextResponse.json({ activeProfileId });
@@ -19,8 +18,7 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const r = requireActiveUser(request);
-    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    if ("status" in r) return NextResponse.json({ error: r.status === 403 ? "Account inactive" : "Unauthorized" }, { status: r.status });
     const user = r.user;
     const body = await request.json();
     let activeProfileId =

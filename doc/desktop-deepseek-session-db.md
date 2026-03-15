@@ -6,8 +6,8 @@ The DeepSeek chat webview session (cookies) is stored in the app SQLite DB so **
 
 ## Behavior
 
-- **First time (per app session):** When the DeepSeek panel is first opened, the app fetches cookies from `GET /api/deepseek-cookies`, injects them into the partition `persist:deepseek`, then sets the webview `src` so the first load already has the shared session (no login flash).
-- **Subsequent opens:** No re-fetch; the partition already has cookies (Electron persists them on disk).
+- **On every panel open:** When the DeepSeek panel is opened, the app fetches cookies from `GET /api/deepseek-cookies`, injects them into the partition `persist:deepseek`, then sets the webview `src` (or reloads if already loaded) so the shared session is always up to date. When the panel is closed, the "loaded from DB" flag is reset so the next open refetches (sync works after an admin saves).
+- **Reload after inject:** After injecting cookies, the webview is reloaded so the new session is applied and "logged in" state is visible.
 - **If session invalid:** After the webview loads, a simple heuristic (e.g. page has "Log in" text or login form) detects "not logged in". The app clears the "loaded from DB" flag, re-fetches from the API, re-injects cookies, and reloads the webview. This is retried up to **3** times.
 - **Replace strategy:** When loading from DB, existing cookies for `chat.deepseek.com` in the partition are cleared, then only the cookies from the DB are set.
 - **Full cookies:** The DB stores full Electron cookie objects (as returned by `session.cookies.get()`).
