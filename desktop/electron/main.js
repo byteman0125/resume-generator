@@ -133,12 +133,24 @@ app.whenReady().then(() => {
       return new Response("Forbidden", { status: 403 });
     }
     try {
+      if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+        pathname = "index.html";
+        const indexPath = path.join(DIST_DIR, "index.html");
+        const data = fs.readFileSync(indexPath);
+        return new Response(data, { headers: { "Content-Type": "text/html" } });
+      }
       const data = fs.readFileSync(absolutePath);
       return new Response(data, {
         headers: { "Content-Type": getMime(pathname) },
       });
     } catch (err) {
-      return new Response("Not Found", { status: 404 });
+      try {
+        const indexPath = path.join(DIST_DIR, "index.html");
+        const data = fs.readFileSync(indexPath);
+        return new Response(data, { headers: { "Content-Type": "text/html" } });
+      } catch (e) {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   });
 
@@ -318,6 +330,13 @@ ipcMain.handle("save-resume-temp", async (event, { buffer, fileName, profileName
 // DeepSeek shared session: get/set cookies in partition persist:deepseek
 const DEEPSEEK_PARTITION = "persist:deepseek";
 const DEEPSEEK_URL = "https://chat.deepseek.com";
+
+ipcMain.handle("write-clipboard-text", (_event, text) => {
+  if (typeof text === "string") {
+    clipboard.writeText(text);
+  }
+  return {};
+});
 
 ipcMain.handle("get-deepseek-cookies", async () => {
   const ses = session.fromPartition(DEEPSEEK_PARTITION);

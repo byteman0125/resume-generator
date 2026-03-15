@@ -49,6 +49,16 @@ export function requireUser(request: Request): UserRow | null {
   return user ?? null;
 }
 
+export type RequireActiveResult = { user: UserRow } | { status: 401 } | { status: 403 };
+
+/** Like requireUser but returns 403 if user exists but is inactive. Use in routes that must block inactive accounts. */
+export function requireActiveUser(request: Request): RequireActiveResult {
+  const user = requireUser(request);
+  if (!user) return { status: 401 };
+  if (user.active === 0) return { status: 403 };
+  return { user };
+}
+
 const CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&*";
 export function generateRandomPassword(length: number = 14): string {
   let s = "";

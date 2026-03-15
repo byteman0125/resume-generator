@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { listProfiles, createProfile, reorderProfiles, getProfile, type ProfileRow } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireActiveUser } from "@/lib/auth";
 import { defaultResumeData, type ResumeData } from "@/lib/resume-store";
 
 function formatPeriod(start: string, end: string, current: boolean): string {
@@ -47,10 +47,10 @@ function profileSummary(row: ProfileRow) {
 
 export async function GET(request: Request) {
   try {
-    const user = requireUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     const profiles =
       user.role === "admin"
         ? listProfiles()
@@ -77,10 +77,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const user = requireUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     const body = await request.json();
     const name = typeof body.name === "string" ? body.name.trim() || "Untitled" : "Untitled";
     const profile = createProfile(name, body.data ?? defaultResumeData);
@@ -98,10 +98,10 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const user = requireUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     const body = await request.json();
     const orderedIds = body?.orderedIds;
     if (!Array.isArray(orderedIds) || orderedIds.some((id: unknown) => typeof id !== "string")) {

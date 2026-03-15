@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { getActiveProfileId, setActiveProfileId } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireActiveUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
-    const user = requireUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     const activeProfileId = getActiveProfileId();
     return NextResponse.json({ activeProfileId });
   } catch (e) {
@@ -18,10 +18,10 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const user = requireUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     const body = await request.json();
     let activeProfileId =
       body.activeProfileId === null || body.activeProfileId === undefined

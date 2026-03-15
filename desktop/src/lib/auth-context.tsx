@@ -6,6 +6,7 @@ export interface AuthUser {
   username: string;
   role: "admin" | "user";
   assignedProfileId: string | null;
+  active: boolean;
 }
 
 interface AuthContextValue {
@@ -60,6 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         username: data.username,
         role: data.role,
         assignedProfileId: data.assignedProfileId ?? null,
+        active: data.active !== false,
       });
       return true;
     } catch {

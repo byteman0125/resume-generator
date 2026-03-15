@@ -5,7 +5,7 @@ import {
   createUser,
   getProfile,
 } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireActiveUser } from "@/lib/auth";
 import { hashPassword, generateRandomPassword } from "@/lib/auth";
 
 /** User list item (no password). */
@@ -18,14 +18,25 @@ type UserListItem = {
   start_date: string | null;
   created_at: string;
   application_count: number;
+  last_seen_at: string | null;
+  online: boolean;
+  active: boolean;
 };
+
+const ONLINE_THRESHOLD_MS = 3 * 60 * 1000; // 3 minutes
+
+function isOnline(lastSeenAt: string | null): boolean {
+  if (!lastSeenAt) return false;
+  const t = new Date(lastSeenAt).getTime();
+  return Number.isFinite(t) && Date.now() - t <= ONLINE_THRESHOLD_MS;
+}
 
 export async function GET(request: Request) {
   try {
-    const user = requireUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     if (user.role !== "admin") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -40,6 +51,9 @@ export async function GET(request: Request) {
       start_date: r.start_date,
       created_at: r.created_at,
       application_count: r.application_count,
+      last_seen_at: r.last_seen_at ?? null,
+      online: isOnline(r.last_seen_at ?? null),
+      active: (r.active ?? 1) !== 0,
     }));
     return NextResponse.json(list);
   } catch (e) {
@@ -52,10 +66,10 @@ export async function POST(request: Request) {
   try {
     const hasUsers = hasAnyUser();
     if (hasUsers) {
-      const user = requireUser(request);
-      if (!user) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
+      const r = requireActiveUser(request);
+      if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+      const user = r.user;
       if (user.role !== "admin") {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
@@ -68,6 +82,7 @@ export async function POST(request: Request) {
     const role = body.role === "user" ? "user" : "admin";
     const assigned_profile_id =
       typeof body.assigned_profile_id === "string" ? body.assigned_profile_id.trim() || null : null;
+    const active = body.active === false ? 0 : 1;
     const start_date =
       typeof body.start_date === "string" ? body.start_date.trim() || null : null;
     const plainPassword = generateRandomPassword(14);
@@ -78,10 +93,18 @@ export async function POST(request: Request) {
       role,
       assigned_profile_id,
       start_date,
+      active,
     });
     const { password_hash: _, ...userWithoutHash } = created;
     return NextResponse.json({
-      user: userWithoutHash,
+      user: {
+        ...userWithoutHash,
+        assigned_profile_name: assigned_profile_id ? getProfile(assigned_profile_id)?.name ?? null : null,
+        application_count: 0,
+        last_seen_at: userWithoutHash.last_seen_at ?? null,
+        online: false,
+        active: true,
+      },
       plainPassword,
     });
   } catch (e) {

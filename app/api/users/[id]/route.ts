@@ -6,8 +6,9 @@ import {
   deleteUser,
   countAdminUsers,
   getProfile,
+  getApplicationCountByProfileId,
 } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireActiveUser } from "@/lib/auth";
 import { hashPassword, generateRandomPassword } from "@/lib/auth";
 
 export async function PATCH(
@@ -15,10 +16,10 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = requireUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     if (user.role !== "admin") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -33,6 +34,7 @@ export async function PATCH(
       role?: "admin" | "user";
       assigned_profile_id?: string | null;
       start_date?: string | null;
+      active?: number | boolean;
     } = {};
     if (typeof body.username === "string") updates.username = body.username.trim();
     if (body.role === "user" || body.role === "admin") updates.role = body.role;
@@ -44,6 +46,7 @@ export async function PATCH(
     if ("start_date" in body)
       updates.start_date =
         typeof body.start_date === "string" ? body.start_date.trim() || null : null;
+    if (typeof body.active === "boolean") updates.active = body.active ? 1 : 0;
 
     let plainPassword: string | undefined;
     if (body.resetPassword === true) {
@@ -58,10 +61,21 @@ export async function PATCH(
     const profileName = updated.assigned_profile_id
       ? getProfile(updated.assigned_profile_id)?.name ?? null
       : null;
+    const lastSeenAt = userWithoutHash.last_seen_at ?? null;
+    const online =
+      lastSeenAt && Number.isFinite(new Date(lastSeenAt).getTime())
+        ? Date.now() - new Date(lastSeenAt).getTime() <= 3 * 60 * 1000
+        : false;
     const response: Record<string, unknown> = {
       user: {
         ...userWithoutHash,
         assigned_profile_name: profileName,
+        application_count: updated.assigned_profile_id
+          ? getApplicationCountByProfileId(updated.assigned_profile_id)
+          : 0,
+        last_seen_at: lastSeenAt,
+        online,
+        active: (updated.active ?? 1) !== 0,
       },
     };
     if (plainPassword !== undefined) response.plainPassword = plainPassword;
@@ -77,10 +91,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = requireUser(_request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const r = requireActiveUser(_request);
+    if (r.status === 401) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (r.status === 403) return NextResponse.json({ error: "Account inactive" }, { status: 403 });
+    const user = r.user;
     if (user.role !== "admin") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

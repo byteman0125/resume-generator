@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld("electron", {
   showSavePathDialog: () => ipcRenderer.invoke("show-save-path-dialog"),
   getDeepSeekCookies: () => ipcRenderer.invoke("get-deepseek-cookies"),
   setDeepSeekCookies: (cookies) => ipcRenderer.invoke("set-deepseek-cookies", cookies),
+  writeClipboardText: (text) => ipcRenderer.invoke("write-clipboard-text", text),
 });

@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL
 );
 `);
+  // Migration: add last_seen_at for online status (ignore if already present)
+  try {
+    const info = db.prepare<unknown[], { name: string }>("SELECT name FROM pragma_table_info('users') WHERE name = 'last_seen_at'").get();
+    if (!info) {
+      db.exec("ALTER TABLE users ADD COLUMN last_seen_at TEXT");
+    }
+  } catch (_) {}
+  // Migration: add active (1 = active, 0 = inactive)
+  try {
+    const info = db.prepare<unknown[], { name: string }>("SELECT name FROM pragma_table_info('users') WHERE name = 'active'").get();
+    if (!info) {
+      db.exec("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
+    }
+  } catch (_) {}
 
 function genId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -621,6 +635,8 @@ export interface UserRow {
   assigned_profile_id: string | null;
   start_date: string | null;
   created_at: string;
+  last_seen_at?: string | null;
+  active?: number; // 1 = active, 0 = inactive
 }
 
 export function hasAnyUser(): boolean {
@@ -642,7 +658,7 @@ export function getUserByUsername(username: string): UserRow | undefined {
         created_at: string;
       }
     >(
-      "SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at FROM users WHERE username = ?"
+      "SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at, last_seen_at, COALESCE(active, 1) AS active FROM users WHERE username = ?"
     )
     .get(username.trim().toLowerCase());
   if (!row) return undefined;
@@ -666,7 +682,7 @@ export function getUserById(id: string): UserRow | undefined {
         created_at: string;
       }
     >(
-      "SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at FROM users WHERE id = ?"
+      "SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at, last_seen_at, COALESCE(active, 1) AS active FROM users WHERE id = ?"
     )
     .get(id);
   if (!row) return undefined;
@@ -688,12 +704,19 @@ export function listUsers(): (UserRow & { application_count: number })[] {
         assigned_profile_id: string | null;
         start_date: string | null;
         created_at: string;
+        last_seen_at: string | null;
+        active: number;
       }
-    >("SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at FROM users ORDER BY created_at ASC")
+    >("SELECT id, username, password_hash, role, assigned_profile_id, start_date, created_at, last_seen_at, COALESCE(active, 1) AS active FROM users ORDER BY created_at ASC")
     .all();
   const counts = db
     .prepare<unknown[], { profile_id: string; c: number }>(
-      "SELECT profile_id, COUNT(*) AS c FROM job_applications WHERE profile_id IS NOT NULL AND profile_id != '' GROUP BY profile_id"
+      `SELECT profile_id, COUNT(*) AS c FROM job_applications
+       WHERE profile_id IS NOT NULL AND profile_id != ''
+         AND TRIM(COALESCE(resume_file_name, '')) != ''
+         AND TRIM(COALESCE(job_description, '')) != ''
+         AND applied_manually = 1
+       GROUP BY profile_id`
     )
     .all() as { profile_id: string; c: number }[];
   const countByProfile = new Map(counts.map((r) => [r.profile_id, r.c]));
@@ -704,9 +727,16 @@ export function listUsers(): (UserRow & { application_count: number })[] {
   }));
 }
 
+/** Count job applications that have resume, job description, and status = applied. */
 export function getApplicationCountByProfileId(profileId: string): number {
   const row = db
-    .prepare<unknown[], { c: number }>("SELECT COUNT(*) AS c FROM job_applications WHERE profile_id = ?")
+    .prepare<unknown[], { c: number }>(
+      `SELECT COUNT(*) AS c FROM job_applications
+       WHERE profile_id = ?
+         AND TRIM(COALESCE(resume_file_name, '')) != ''
+         AND TRIM(COALESCE(job_description, '')) != ''
+         AND applied_manually = 1`
+    )
     .get(profileId);
   return row ? (row as { c: number }).c : 0;
 }
@@ -717,12 +747,14 @@ export function createUser(params: {
   role: UserRole;
   assigned_profile_id?: string | null;
   start_date?: string | null;
+  active?: number;
 }): UserRow {
   const id = genId();
   const username = params.username.trim().toLowerCase();
   const now = new Date().toISOString();
+  const active = params.active !== undefined ? (params.active ? 1 : 0) : 1;
   db.prepare(
-    "INSERT INTO users (id, username, password_hash, role, assigned_profile_id, start_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO users (id, username, password_hash, role, assigned_profile_id, start_date, created_at, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     id,
     username,
@@ -730,7 +762,8 @@ export function createUser(params: {
     params.role,
     params.assigned_profile_id ?? null,
     params.start_date ?? null,
-    now
+    now,
+    active
   );
   const row = getUserById(id)!;
   return row;
@@ -743,6 +776,7 @@ export function updateUser(
     role?: UserRole;
     assigned_profile_id?: string | null;
     start_date?: string | null;
+    active?: number | boolean;
   }
 ): UserRow {
   const existing = getUserById(id);
@@ -751,11 +785,13 @@ export function updateUser(
   const role = updates.role ?? existing.role;
   const assigned_profile_id = updates.assigned_profile_id !== undefined ? updates.assigned_profile_id : existing.assigned_profile_id;
   const start_date = updates.start_date !== undefined ? updates.start_date : existing.start_date;
-  db.prepare("UPDATE users SET username = ?, role = ?, assigned_profile_id = ?, start_date = ? WHERE id = ?").run(
+  const active = updates.active !== undefined ? (updates.active === true || updates.active === 1 ? 1 : 0) : (existing.active ?? 1);
+  db.prepare("UPDATE users SET username = ?, role = ?, assigned_profile_id = ?, start_date = ?, active = ? WHERE id = ?").run(
     username,
     role,
     assigned_profile_id,
     start_date,
+    active,
     id
   );
   return getUserById(id)!;
@@ -763,6 +799,11 @@ export function updateUser(
 
 export function updateUserPassword(id: string, password_hash: string): void {
   db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(password_hash, id);
+}
+
+export function updateUserLastSeen(id: string): void {
+  const now = new Date().toISOString();
+  db.prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(now, id);
 }
 
 export function deleteUser(id: string): void {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getUserById } from "@/lib/db";
+import { getUserById, updateUserLastSeen } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
 
 export async function GET(request: Request) {
@@ -12,12 +12,14 @@ export async function GET(request: Request) {
     if (!user) {
       return NextResponse.json({ error: "User no longer exists" }, { status: 401 });
     }
+    updateUserLastSeen(payload.userId);
     return NextResponse.json({
       id: user.id,
       username: user.username,
       role: user.role,
       assignedProfileId: user.assigned_profile_id,
       startDate: user.start_date,
+      active: user.active !== 0,
     });
   } catch (e) {
     console.error(e);

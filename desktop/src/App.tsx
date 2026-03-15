@@ -10,6 +10,7 @@ import { ProfilePage } from "./pages/ProfilePage";
 import { AIPage } from "./pages/AIPage";
 import { TemplatePage } from "./pages/TemplatePage";
 import { AuthPage } from "./pages/AuthPage";
+import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { UsersPage } from "./pages/UsersPage";
 
 /** Redirect empty path or /index.html to "/" so job applications always show on start. */
@@ -51,7 +52,7 @@ function AppShell() {
 }
 
 export function App() {
-  const { token, loading } = useAuth();
+  const { token, user, loading } = useAuth();
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
@@ -61,6 +62,9 @@ export function App() {
   }
   if (!token) {
     return <AuthPage />;
+  }
+  if (user && !user.active) {
+    return <NoPermissionPage />;
   }
   return <AppShell />;
 }
