@@ -110,7 +110,68 @@ function useFlyoutProfiles(): {
   const [profiles, setProfiles] = useState<ApiProfileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const electron = (window as unknown as { electron?: { getAuthForFlyout?: () => Promise<{ baseUrl?: string; token?: string | null }> } }).electron;
+  const electron = (window as unknown as {
+    electron?: {
+      getAuthForFlyout?: () => Promise<{ baseUrl?: string; token?: string | null }>;
+      onAuthForFlyoutUpdated?: (cb: (a: { baseUrl?: string; token?: string | null }) => void) => () => void;
+    };
+  }).electron;
+
+  const applyAuthAndFetch = useCallback((a: { baseUrl?: string; token?: string | null } | null) => {
+    const baseUrl = (a?.baseUrl ?? "").trim();
+    const token = a?.token ?? null;
+    const nextAuth = baseUrl && token ? { baseUrl, token } : null;
+    setAuth(nextAuth);
+    if (!baseUrl || !token) {
+      setProfiles([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const url = `${baseUrl.replace(/\/$/, "")}/api/profiles`;
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load profiles");
+        return res.json();
+      })
+      .then((list: unknown) => {
+        const arr = Array.isArray(list) ? list : [];
+        setProfiles(
+          arr.map((p: Record<string, unknown>) => ({
+            id: String(p.id ?? ""),
+            name: String(p.name ?? ""),
+            title: p.title != null ? String(p.title) : undefined,
+            email: p.email != null ? String(p.email) : undefined,
+            phone: p.phone != null ? String(p.phone) : undefined,
+            location: p.location != null ? String(p.location) : undefined,
+            address: p.address != null ? String(p.address) : undefined,
+            city: p.city != null ? String(p.city) : undefined,
+            state: p.state != null ? String(p.state) : undefined,
+            postalCode: p.postalCode != null ? String(p.postalCode) : undefined,
+            birthday: p.birthday != null ? String(p.birthday) : undefined,
+            linkedin: p.linkedin != null ? String(p.linkedin) : undefined,
+            experience: Array.isArray(p.experience)
+              ? (p.experience as { company?: string; period?: string }[]).map((e) => ({
+                  company: (e.company ?? "").trim() || "—",
+                  period: (e.period ?? "").trim() || "—",
+                }))
+              : undefined,
+            education: Array.isArray(p.education)
+              ? (p.education as { school?: string; degree?: string }[]).map((e) => ({
+                  school: (e.school ?? "").trim() || "—",
+                  degree: (e.degree ?? "").trim() || "—",
+                }))
+              : undefined,
+          }))
+        );
+        setError(null);
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Failed to load");
+        setProfiles([]);
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     if (!electron?.getAuthForFlyout) {
@@ -120,68 +181,17 @@ function useFlyoutProfiles(): {
     let cancelled = false;
     electron.getAuthForFlyout().then((a) => {
       if (cancelled) return;
-      const baseUrl = (a?.baseUrl ?? "").trim();
-      const token = a?.token ?? null;
-      setAuth(baseUrl && token ? { baseUrl, token } : null);
-      if (!baseUrl || !token) {
-        setProfiles([]);
-        setLoading(false);
-        return;
-      }
-      const url = `${baseUrl.replace(/\/$/, "")}/api/profiles`;
-      fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-        .then((res) => {
-          if (cancelled) return res;
-          if (!res.ok) throw new Error("Failed to load profiles");
-          return res.json();
-        })
-        .then((list: unknown) => {
-          if (cancelled) return;
-          const arr = Array.isArray(list) ? list : [];
-          setProfiles(
-            arr.map((p: Record<string, unknown>) => ({
-              id: String(p.id ?? ""),
-              name: String(p.name ?? ""),
-              title: p.title != null ? String(p.title) : undefined,
-              email: p.email != null ? String(p.email) : undefined,
-              phone: p.phone != null ? String(p.phone) : undefined,
-              location: p.location != null ? String(p.location) : undefined,
-              address: p.address != null ? String(p.address) : undefined,
-              city: p.city != null ? String(p.city) : undefined,
-              state: p.state != null ? String(p.state) : undefined,
-              postalCode: p.postalCode != null ? String(p.postalCode) : undefined,
-              birthday: p.birthday != null ? String(p.birthday) : undefined,
-              linkedin: p.linkedin != null ? String(p.linkedin) : undefined,
-              experience: Array.isArray(p.experience)
-                ? (p.experience as { company?: string; period?: string }[]).map((e) => ({
-                    company: (e.company ?? "").trim() || "—",
-                    period: (e.period ?? "").trim() || "—",
-                  }))
-                : undefined,
-              education: Array.isArray(p.education)
-                ? (p.education as { school?: string; degree?: string }[]).map((e) => ({
-                    school: (e.school ?? "").trim() || "—",
-                    degree: (e.degree ?? "").trim() || "—",
-                  }))
-                : undefined,
-            }))
-          );
-          setError(null);
-        })
-        .catch((e) => {
-          if (!cancelled) {
-            setError(e instanceof Error ? e.message : "Failed to load");
-            setProfiles([]);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
+      applyAuthAndFetch(a);
     }).catch(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [electron?.getAuthForFlyout]);
+  }, [electron?.getAuthForFlyout, applyAuthAndFetch]);
+
+  useEffect(() => {
+    const unsubscribe = electron?.onAuthForFlyoutUpdated?.(applyAuthAndFetch);
+    return () => unsubscribe?.();
+  }, [electron?.onAuthForFlyoutUpdated, applyAuthAndFetch]);
 
   return { profiles, loading, error, auth };
 }

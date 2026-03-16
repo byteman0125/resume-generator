@@ -511,6 +511,11 @@ ipcMain.on("set-auth-for-flyout", (_event, payload) => {
       baseUrl: typeof payload.baseUrl === "string" ? payload.baseUrl : "",
       token: payload.token != null && payload.token !== "" ? payload.token : null,
     };
+    if (profileFlyoutWindow && !profileFlyoutWindow.isDestroyed()) {
+      try {
+        profileFlyoutWindow.webContents.send("auth-for-flyout-updated", authForFlyout);
+      } catch (_) {}
+    }
   }
 });
 ipcMain.handle("get-auth-for-flyout", () => authForFlyout);

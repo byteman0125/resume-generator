@@ -32,4 +32,9 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.on("profile-flyout-cancel-close", handler);
     return () => ipcRenderer.removeListener("profile-flyout-cancel-close", handler);
   },
+  onAuthForFlyoutUpdated: (cb) => {
+    const handler = (_event, auth) => cb(auth);
+    ipcRenderer.on("auth-for-flyout-updated", handler);
+    return () => ipcRenderer.removeListener("auth-for-flyout-updated", handler);
+  },
 });
