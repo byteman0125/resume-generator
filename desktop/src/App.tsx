@@ -1,5 +1,6 @@
 import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { useEffect } from "react";
+import { getBaseUrl } from "./api";
 import { AppHeader } from "./components/AppHeader";
 import { StatusBar } from "./components/StatusBar";
 import { AuthProvider, useAuth } from "./lib/auth-context";
@@ -53,6 +54,14 @@ function AppShell() {
 
 export function App() {
   const { token, user, loading } = useAuth();
+
+  useEffect(() => {
+    const w = window as unknown as { electron?: { setAuthForFlyout?: (p: { baseUrl: string; token: string | null }) => void } };
+    if (!w.electron?.setAuthForFlyout) return;
+    if (token) w.electron.setAuthForFlyout({ baseUrl: getBaseUrl(), token });
+    else w.electron.setAuthForFlyout({ baseUrl: "", token: null });
+  }, [token]);
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">

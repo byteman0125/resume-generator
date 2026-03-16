@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain, clipboard, dialog, session } = require("electron");
+const { app, BrowserWindow, protocol, Tray, Menu, nativeImage, ipcMain, clipboard, dialog, session, screen } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -39,6 +39,12 @@ const TRAY_ICON_BASE64 =
 
 let mainWindow = null;
 let tray = null;
+let profileIconWindow = null;
+let profileFlyoutWindow = null;
+/** Profile summary for the flyout (shared; main window pushes, flyout window reads via IPC). */
+let lastProfileFlyoutSummary = null;
+/** Auth for flyout window (baseUrl + token) so it can call /api/profiles. Set by main window. */
+let authForFlyout = { baseUrl: "", token: null };
 
 function getAppIcon() {
   const iconPath = path.join(__dirname, "resources", "icon.png");
@@ -111,12 +117,171 @@ function createTray() {
   tray = new Tray(icon.isEmpty() ? nativeImage.createFromDataURL("data:image/png;base64," + TRAY_ICON_BASE64) : icon);
   tray.setToolTip("Tailor (Desktop)");
   tray.on("click", () => showMainWindow());
-  const contextMenu = Menu.buildFromTemplate([
-    { label: "Show", click: () => showMainWindow() },
-    { type: "separator" },
-    { label: "Quit", click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
-  tray.setContextMenu(contextMenu);
+  const buildContextMenu = () => {
+    const floatingVisible =
+      !!profileIconWindow &&
+      !profileIconWindow.isDestroyed() &&
+      profileIconWindow.isVisible();
+
+    return Menu.buildFromTemplate([
+      { label: "Show", click: () => showMainWindow() },
+      { type: "separator" },
+      {
+        label: floatingVisible ? "Hide floating button" : "Show floating button",
+        click: () => {
+          try {
+            if (!profileIconWindow || profileIconWindow.isDestroyed()) {
+              createProfileFlyoutWindows();
+              if (profileIconWindow && !profileIconWindow.isDestroyed()) {
+                profileIconWindow.show();
+              }
+            } else if (profileIconWindow.isVisible()) {
+              profileIconWindow.hide();
+            } else {
+              profileIconWindow.show();
+            }
+          } catch (_) {}
+          try {
+            tray.setContextMenu(buildContextMenu());
+          } catch (_) {}
+        },
+      },
+      { type: "separator" },
+      { label: "Quit", click: () => { app.isQuitting = true; app.quit(); } },
+    ]);
+  };
+
+  tray.setContextMenu(buildContextMenu());
+}
+
+function getProfileFlyoutIconPosition() {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const raw = fs.readFileSync(SETTINGS_FILE, "utf8");
+      const data = JSON.parse(raw);
+      const pos = data && typeof data === "object" ? data.profileFlyoutIcon : null;
+      if (
+        pos &&
+        typeof pos.x === "number" &&
+        typeof pos.y === "number" &&
+        typeof pos.width === "number" &&
+        typeof pos.height === "number"
+      ) {
+        return pos;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+function setProfileFlyoutIconPosition(bounds) {
+  try {
+    const dir = path.dirname(SETTINGS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    let data = {};
+    if (fs.existsSync(SETTINGS_FILE)) {
+      try {
+        data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+      } catch (_) {}
+    }
+    data.profileFlyoutIcon = {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    };
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) {
+    console.error("Failed to save profile flyout icon position:", err);
+  }
+}
+
+function createProfileFlyoutWindows() {
+  const icon = getAppIcon();
+  if (!profileIconWindow) {
+    const defaultBounds = getProfileFlyoutIconPosition();
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const workArea = primaryDisplay && primaryDisplay.workArea ? primaryDisplay.workArea : { width: 800, height: 600, x: 0, y: 0 };
+    const width = 48;
+    const height = 48;
+    const defaultX =
+      (defaultBounds && typeof defaultBounds.x === "number"
+        ? defaultBounds.x
+        : workArea.x + workArea.width - width - 24);
+    const defaultY =
+      (defaultBounds && typeof defaultBounds.y === "number"
+        ? defaultBounds.y
+        : workArea.y + Math.round(workArea.height / 2) - Math.round(height / 2));
+
+    profileIconWindow = new BrowserWindow({
+      width,
+      height,
+      x: defaultX,
+      y: defaultY,
+      frame: false,
+      resizable: false,
+      movable: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      show: true,
+      transparent: true,
+      hasShadow: false,
+      icon: icon.isEmpty() ? undefined : icon,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        webSecurity: false,
+        webviewTag: false,
+        preload: PRELOAD_PATH,
+      },
+    });
+    profileIconWindow.setMenuBarVisibility(false);
+    profileIconWindow.setAlwaysOnTop(true, "screen-saver");
+    try {
+      profileIconWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } catch (_) {}
+    profileIconWindow.loadURL("app://./index.html?flyout=profile-icon");
+    profileIconWindow.on("moved", () => {
+      try {
+        const b = profileIconWindow.getBounds();
+        setProfileFlyoutIconPosition(b);
+      } catch (_) {}
+    });
+    profileIconWindow.on("closed", () => {
+      profileIconWindow = null;
+    });
+  }
+
+  if (!profileFlyoutWindow) {
+    profileFlyoutWindow = new BrowserWindow({
+      width: 280,
+      height: 480,
+      frame: false,
+      resizable: false,
+      movable: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      show: false,
+      transparent: true,
+      icon: icon.isEmpty() ? undefined : icon,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        webSecurity: false,
+        webviewTag: false,
+        preload: PRELOAD_PATH,
+      },
+    });
+    profileFlyoutWindow.setMenuBarVisibility(false);
+    profileFlyoutWindow.setAlwaysOnTop(true, "screen-saver");
+    try {
+      profileFlyoutWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } catch (_) {}
+    profileFlyoutWindow.loadURL("app://./index.html?flyout=profile");
+    profileFlyoutWindow.on("closed", () => {
+      profileFlyoutWindow = null;
+    });
+  }
 }
 
 app.whenReady().then(() => {
@@ -156,6 +321,7 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
+  createProfileFlyoutWindows();
 });
 
 // Keep app running when window is closed (hidden to tray)
@@ -334,6 +500,59 @@ const DEEPSEEK_URL = "https://chat.deepseek.com";
 ipcMain.handle("write-clipboard-text", (_event, text) => {
   if (typeof text === "string") {
     clipboard.writeText(text);
+  }
+  return {};
+});
+
+ipcMain.handle("get-profile-flyout-summary", () => lastProfileFlyoutSummary);
+ipcMain.on("set-auth-for-flyout", (_event, payload) => {
+  if (payload && typeof payload === "object") {
+    authForFlyout = {
+      baseUrl: typeof payload.baseUrl === "string" ? payload.baseUrl : "",
+      token: payload.token != null && payload.token !== "" ? payload.token : null,
+    };
+  }
+});
+ipcMain.handle("get-auth-for-flyout", () => authForFlyout);
+ipcMain.on("set-profile-flyout-summary", (_event, summary) => {
+  lastProfileFlyoutSummary = summary && typeof summary === "object" ? summary : null;
+  if (profileFlyoutWindow && !profileFlyoutWindow.isDestroyed()) {
+    try {
+      profileFlyoutWindow.webContents.send("profile-flyout-summary", lastProfileFlyoutSummary);
+    } catch (_) {}
+  }
+});
+
+ipcMain.handle("set-profile-flyout-hover", (_event, hovering) => {
+  if (!profileIconWindow || !profileFlyoutWindow) return {};
+  if (hovering) {
+    try {
+      if (profileIconWindow && !profileIconWindow.isDestroyed()) {
+        profileIconWindow.webContents.send("profile-flyout-cancel-close");
+      }
+      const iconBounds = profileIconWindow.getBounds();
+      const flyoutBounds = profileFlyoutWindow.getBounds();
+      const display = screen.getDisplayMatching(iconBounds);
+      const workArea = display && display.workArea ? display.workArea : { x: 0, y: 0, width: 800, height: 600 };
+      let x = iconBounds.x - flyoutBounds.width - 4;
+      const y = Math.max(workArea.y, Math.min(iconBounds.y, workArea.y + workArea.height - flyoutBounds.height));
+      if (x < workArea.x) {
+        x = iconBounds.x + iconBounds.width + 4;
+      }
+      x = Math.max(workArea.x, Math.min(x, workArea.x + workArea.width - flyoutBounds.width));
+      profileFlyoutWindow.setPosition(Math.round(x), Math.round(y));
+    } catch (_) {}
+    try {
+      profileFlyoutWindow.setAlwaysOnTop(true, "pop-up-menu");
+    } catch (_) {}
+    profileFlyoutWindow.showInactive();
+  } else {
+    try {
+      profileFlyoutWindow.hide();
+      if (profileIconWindow && !profileIconWindow.isDestroyed()) {
+        profileIconWindow.webContents.send("profile-flyout-closed");
+      }
+    } catch (_) {}
   }
   return {};
 });

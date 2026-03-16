@@ -1822,6 +1822,38 @@ export function JobApplicationsView() {
         };
         setModalResumeData(withContentCleared);
         setModalResumeDataId(profileId);
+        try {
+          const p = withContentCleared.profile;
+          const locationParts = [p.city, p.state, p.postalCode]
+            .map((x) => (x || "").trim())
+            .filter(Boolean);
+          const location = locationParts.join(", ");
+          const companyName = (form.company_name || "").trim();
+          const summaryPayload = {
+            id: profileId,
+            profileName: p.name || "",
+            title: p.title || "",
+            email: p.email || "",
+            phone: p.phone || "",
+            location,
+            company: companyName,
+            updatedAt: Date.now(),
+          };
+          window.localStorage.setItem(
+            "desktop-profile-flyout-current-profile",
+            JSON.stringify(summaryPayload)
+          );
+          const electron = (window as unknown as { electron?: { setProfileFlyoutSummary?: (s: unknown) => void } }).electron;
+          if (electron?.setProfileFlyoutSummary) {
+            try {
+              electron.setProfileFlyoutSummary(summaryPayload);
+            } catch {
+              // ignore
+            }
+          }
+        } catch {
+          // ignore storage errors
+        }
       })
       .catch(() => {
         if (!cancelled) {

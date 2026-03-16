@@ -12,4 +12,24 @@ contextBridge.exposeInMainWorld("electron", {
   getDeepSeekCookies: () => ipcRenderer.invoke("get-deepseek-cookies"),
   setDeepSeekCookies: (cookies) => ipcRenderer.invoke("set-deepseek-cookies", cookies),
   writeClipboardText: (text) => ipcRenderer.invoke("write-clipboard-text", text),
+  setProfileFlyoutHover: (hovering) => ipcRenderer.invoke("set-profile-flyout-hover", hovering),
+  getProfileFlyoutSummary: () => ipcRenderer.invoke("get-profile-flyout-summary"),
+  setProfileFlyoutSummary: (summary) => ipcRenderer.send("set-profile-flyout-summary", summary),
+  setAuthForFlyout: (payload) => ipcRenderer.send("set-auth-for-flyout", payload),
+  getAuthForFlyout: () => ipcRenderer.invoke("get-auth-for-flyout"),
+  onProfileFlyoutSummary: (cb) => {
+    const handler = (_event, summary) => cb(summary);
+    ipcRenderer.on("profile-flyout-summary", handler);
+    return () => ipcRenderer.removeListener("profile-flyout-summary", handler);
+  },
+  onProfileFlyoutClosed: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("profile-flyout-closed", handler);
+    return () => ipcRenderer.removeListener("profile-flyout-closed", handler);
+  },
+  onProfileFlyoutCancelClose: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("profile-flyout-cancel-close", handler);
+    return () => ipcRenderer.removeListener("profile-flyout-cancel-close", handler);
+  },
 });

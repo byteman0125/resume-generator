@@ -2,6 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { AppWithProviders } from "./App";
+import { ProfileFlyout, ProfileFlyoutIcon } from "./components/ProfileFlyout";
+import { AuthProvider } from "./lib/auth-context";
 import { getBaseUrl, getAuthToken, clearAuthToken } from "./api";
 import { ErrorBoundary } from "./ErrorBoundary";
 import "./index.css";
@@ -53,13 +55,36 @@ try {
 
 const root = document.getElementById("root");
 if (root) {
-  ReactDOM.createRoot(root).render(
-    <React.StrictMode>
-      <ErrorBoundary>
-        <BrowserRouter>
-          <AppWithProviders />
-        </BrowserRouter>
-      </ErrorBoundary>
-    </React.StrictMode>
-  );
+  const params = new URLSearchParams(window.location.search);
+  const flyout = params.get("flyout");
+
+  if (flyout === "profile") {
+    ReactDOM.createRoot(root).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <AuthProvider>
+            <ProfileFlyout />
+          </AuthProvider>
+        </ErrorBoundary>
+      </React.StrictMode>
+    );
+  } else if (flyout === "profile-icon") {
+    ReactDOM.createRoot(root).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <ProfileFlyoutIcon />
+        </ErrorBoundary>
+      </React.StrictMode>
+    );
+  } else {
+    ReactDOM.createRoot(root).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <BrowserRouter>
+            <AppWithProviders />
+          </BrowserRouter>
+        </ErrorBoundary>
+      </React.StrictMode>
+    );
+  }
 }
