@@ -43,6 +43,12 @@ export async function GET(
     if (!fs.existsSync(filePath)) {
       return NextResponse.json({ error: "PDF not found for this application" }, { status: 404 });
     }
+    try {
+      const now = new Date().toISOString();
+      updateJobApplication(id, { last_resume_download_at: now });
+    } catch (e) {
+      console.error("Failed to update last_resume_download_at on download", e);
+    }
     const pdf = fs.readFileSync(filePath);
     const fileName = row.resume_file_name || "resume.pdf";
     return new NextResponse(pdf, {

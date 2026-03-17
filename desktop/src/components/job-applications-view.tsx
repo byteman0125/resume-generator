@@ -27,7 +27,7 @@ import { normalizeCompanyForDuplicateKey } from "@/lib/normalize-company";
 import { defaultResumeData, APPLICATION_RESUME_STYLE, type Experience, type ResumeData, type StoredProfileData } from "@/lib/resume-store";
 import { FORMAT_LIST, formatIdToTemplateId, type FormatId } from "@/lib/template-format";
 import { ApplicationResumeEditor } from "@/components/application-resume-editor";
-import { Check, Copy, ExternalLink, FileText, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Save } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Save, Download } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +64,7 @@ interface JobApplication {
   /** 0 = not applied, 1 = applied */
   applied_manually?: number;
   gpt_chat_url?: string | null;
+  last_resume_download_at?: string | null;
   created_at: string;
 }
 
@@ -3680,8 +3681,12 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                               );
                             }
                             if (alreadyApplied) {
+                              const lastDownload =
+                                user?.role === "admin"
+                                  ? (app as JobApplication).last_resume_download_at
+                                  : null;
                               return (
-                                <div className="inline-flex items-center gap-0.5">
+                                <div className="inline-flex items-center gap-1">
                                   <button
                                     type="button"
                                     className={cn(
@@ -3770,7 +3775,7 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                   <button
                                     type="button"
                                     className={cn(
-                                      "inline-flex items-center justify-center rounded p-1",
+                                      "inline-flex items-center justify-center rounded p-1 gap-1",
                                       "hover:bg-muted"
                                     )}
                                     onMouseEnter={() => {
@@ -3783,157 +3788,119 @@ onClick={(ev: React.MouseEvent<HTMLButtonElement>) => {
                                         })
                                         .catch(() => {});
                                     }}
-                                    onClick={(ev) => {
+                                    onClick={async (ev) => {
                                       ev.preventDefault();
                                       ev.stopPropagation();
-                                      // Open GPT chat in parallel (same as former GPT button: open panel and load this app's chat if any)
-                                      const chatUrl = gptChatUrls[app.id];
-                                      if (!deepSeekPanelOpen) toggleDeepSeekPanel();
-                                      if (chatUrl) {
-                                        setTimeout(() => {
-                                          const wv = deepSeekWebViewRef.current as unknown as { loadURL?: (u: string) => void; src?: string } | null;
-                                          if (!wv) return;
-                                          try {
-                                            if (typeof wv.loadURL === "function") wv.loadURL(chatUrl);
-                                            else if ("src" in wv) (wv as { src?: string }).src = chatUrl;
-                                          } catch {
-                                            // ignore navigation errors
-                                          }
-                                        }, 50);
-                                      }
                                       const log = (msg: string, data?: unknown) => {
-                                        console.log("[ResumeCopy]", msg, data ?? "");
+                                        console.log("[ResumeDownload]", msg, data ?? "");
                                       };
-                                      log("Copy button clicked", { appId: app.id, resumeFileName: app.resume_file_name });
-                                      toast.info("Copying…", { duration: 1500, id: "resume-copy-start" });
+                                      toast.info("Preparing download…", { duration: 1200, id: "resume-download-start" });
                                       try {
-                                        const blob = pdfBlobCacheRef.current.get(app.id);
-                                        const doCopy = async (b: Blob) => {
-                                          const baseName =
-                                            profileName(app.profile_id) ||
-                                            (app.company_name ?? "") ||
-                                            (app.title ?? "") ||
-                                            "Resume";
-                                          const safeBase = baseName
-                                            .replace(/[\\/:*?"<>|]/g, "_")
-                                            .trim()
-                                            .slice(0, 80) || "Resume";
-                                          const fileName = `${safeBase}.pdf`;
-                                          const api = (window as unknown as {
-                                            electron?: {
-                                              saveResumeToTemp?: (
-                                                buffer: ArrayBuffer,
-                                                name: string,
-                                                profileName: string
-                                              ) => Promise<{ filePath: string; clipboardFile: boolean } | string | null>;
-                                            };
-                                          }).electron;
-                                          log("doCopy started", { hasBlob: !!b, blobSize: b.size, hasElectron: !!api?.saveResumeToTemp });
-                                          try {
-                                            const buffer = await b.arrayBuffer();
-                                            let savedPath: string | null = null;
-                                            let clipboardFile = false;
-                                            if (api?.saveResumeToTemp) {
-                                              log("Calling saveResumeToTemp");
-                                              const result = await api.saveResumeToTemp(buffer, fileName, baseName);
-                                              log("saveResumeToTemp result", result);
-                                              if (result != null) {
-                                                if (typeof result === "string") {
-                                                  savedPath = result;
-                                                } else {
-                                                  savedPath = result.filePath ?? null;
-                                                  clipboardFile = result.clipboardFile === true;
-                                                }
-                                              } else {
-                                                log("saveResumeToTemp returned null");
-                                              }
-                                            }
-
-                                            let clipboardCopied = false;
-                                            if (!clipboardFile && typeof navigator.clipboard?.write === "function") {
-                                              try {
-                                                await navigator.clipboard.write([
-                                                  new ClipboardItem({ "application/pdf": b }),
-                                                ]);
-                                                clipboardCopied = true;
-                                                log("PDF written to clipboard");
-                                              } catch (clipboardErr) {
-                                                console.error("[ResumeCopy] Clipboard PDF write failed:", clipboardErr);
-                                              }
-                                            }
-
-                                            const success = !!savedPath || clipboardCopied;
-                                            log("doCopy result", { savedPath, clipboardFile, clipboardCopied, success });
-                                            if (success) {
-                                              setCopiedPdfId(app.id);
-                                              setTimeout(() => setCopiedPdfId(null), 2000);
-                                              if (savedPath) {
-                                                const displayPath = savedPath.split(/[/\\]/).pop() ?? savedPath;
-                                                toast.success(
-                                                  clipboardFile
-                                                    ? `Resume copied. Paste (Ctrl+V) to attach. Saved: ${displayPath}`
-                                                    : `Saved to Downloads: ${displayPath}`,
-                                                  { duration: 4000 }
-                                                );
-                                              } else if (clipboardCopied) {
-                                                toast.success("PDF copied to clipboard", { duration: 2000 });
-                                              }
+                                        const ensureBlob = async (): Promise<Blob | null> => {
+                                          const cached = pdfBlobCacheRef.current.get(app.id);
+                                          if (cached) return cached;
+                                          const res = await fetch(`/api/job-applications/${app.id}/pdf`);
+                                          if (!res.ok) {
+                                            if (res.status === 404) {
+                                              toast.error("No resume PDF for this application. Generate or save a resume first.");
                                             } else {
-                                              toast.error("Copy failed. Generate or save a resume for this application first.");
+                                              toast.error("Failed to load PDF");
                                             }
-                                          } catch (err) {
-                                            console.error("[ResumeCopy] doCopy error:", err);
-                                            toast.error("Copy failed");
+                                            return null;
                                           }
+                                          const b = await res.blob();
+                                          pdfBlobCacheRef.current.set(app.id, b);
+                                          return b;
                                         };
-                                        if (blob) {
-                                          log("Using cached blob", { size: blob.size });
-                                          doCopy(blob).catch((err) => {
-                                            console.error("[ResumeCopy] doCopy (cached) rejected:", err);
-                                            toast.error("Copy failed");
-                                          });
+
+                                        const blob = await ensureBlob();
+                                        if (!blob) return;
+
+                                        const baseName =
+                                          profileName(app.profile_id) ||
+                                          (app.company_name ?? "") ||
+                                          (app.title ?? "") ||
+                                          "Resume";
+                                        const safeBase = baseName
+                                          .replace(/[\\/:*?"<>|]/g, "_")
+                                          .trim()
+                                          .slice(0, 80) || "Resume";
+                                        const fileName = `${safeBase}.pdf`;
+
+                                        const api = (window as unknown as {
+                                          electron?: {
+                                            saveResumeToTemp?: (
+                                              buffer: ArrayBuffer,
+                                              name: string,
+                                              profileName: string
+                                            ) => Promise<{ filePath: string; clipboardFile: boolean } | string | null>;
+                                          };
+                                        }).electron;
+                                        log("Download click", { hasElectron: !!api?.saveResumeToTemp });
+
+                                        const buffer = await blob.arrayBuffer();
+                                        let savedPath: string | null = null;
+                                        if (api?.saveResumeToTemp) {
+                                          const result = await api.saveResumeToTemp(buffer, fileName, baseName);
+                                          if (result != null) {
+                                            if (typeof result === "string") {
+                                              savedPath = result;
+                                            } else {
+                                              savedPath = result.filePath ?? null;
+                                            }
+                                          }
+                                        } else {
+                                          const url = URL.createObjectURL(blob);
+                                          const a = document.createElement("a");
+                                          a.href = url;
+                                          a.download = fileName;
+                                          document.body.appendChild(a);
+                                          a.click();
+                                          document.body.removeChild(a);
+                                          setTimeout(() => URL.revokeObjectURL(url), 5000);
+                                          savedPath = fileName;
+                                        }
+
+                                        if (!savedPath) {
+                                          toast.error("Download failed");
                                           return;
                                         }
-                                        log("No cached blob, fetching PDF", { url: `/api/job-applications/${app.id}/pdf` });
-                                        fetch(`/api/job-applications/${app.id}/pdf`)
-                                          .then((res) => {
-                                            log("Fetch response", { ok: res.ok, status: res.status });
-                                            if (!res.ok) {
-                                              if (res.status === 404) {
-                                                toast.error("No resume PDF for this application. Generate or save a resume first.");
-                                              } else {
-                                                toast.error("Failed to load PDF");
-                                              }
-                                              return null;
-                                            }
-                                            return res.blob();
-                                          })
-                                          .then((b) => {
-                                            if (!b) return;
-                                            log("Fetch blob received", { size: b.size });
-                                            pdfBlobCacheRef.current.set(app.id, b);
-                                            return doCopy(b);
-                                          })
-                                          .catch((err) => {
-                                            console.error("[ResumeCopy] Fetch or doCopy error:", err);
-                                            toast.error("Copy failed");
-                                          });
+
+                                        const displayPath = savedPath.split(/[/\\]/).pop() ?? savedPath;
+                                        toast.success(`Downloaded: ${displayPath}`, { duration: 3500 });
+
+                                        const nowIso = new Date().toISOString();
+                                        fetch(`/api/job-applications/${app.id}`, {
+                                          method: "PATCH",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ last_resume_download_at: nowIso }),
+                                        }).catch(() => {});
+
+                                        (setApplications as React.Dispatch<React.SetStateAction<RowItem[]>>)((prev) =>
+                                          prev.map((rowItem) =>
+                                            !isPlaceholder(rowItem) && rowItem.id === app.id
+                                              ? { ...(rowItem as JobApplication), last_resume_download_at: nowIso }
+                                              : rowItem
+                                          )
+                                        );
                                       } catch (err) {
-                                        console.error("[ResumeCopy] Click handler error:", err);
-                                        toast.error("Copy failed");
+                                        console.error("[ResumeDownload] error:", err);
+                                        toast.error("Download failed");
                                       }
                                     }}
-                                    title={
-                                      copiedPdfId === app.id
-                                        ? "Copied! Paste (Ctrl+V) to attach."
-                                        : "Copy PDF: save to Downloads and clipboard (paste like File Explorer)"
-                                    }
+                                    title="Download resume PDF"
                                   >
-                                    {copiedPdfId === app.id ? (
-                                      <Check className="h-4 w-4 text-green-600" />
-                                    ) : (
-                                      <Copy className="h-4 w-4" />
-                                    )}
+                                    <Download className="h-4 w-4" />
+                                    {lastDownload && (() => {
+                                      const d = new Date(lastDownload);
+                                      const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                                      const date = d.toLocaleDateString();
+                                      return (
+                                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                          {time} {date}
+                                        </span>
+                                      );
+                                    })()}
                                   </button>
                                 </div>
                               );

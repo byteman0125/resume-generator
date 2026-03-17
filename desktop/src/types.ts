@@ -10,6 +10,8 @@ export interface JobApplication {
   /** 0 = not applied, 1 = applied */
   applied_manually?: number;
   gpt_chat_url?: string | null;
+   /** ISO timestamp of last resume download (server-side) */
+  last_resume_download_at?: string | null;
   created_at: string;
 }
 

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS job_applications (
   job_description TEXT NOT NULL,
   applied_manually INTEGER NOT NULL DEFAULT 0,
   gpt_chat_url TEXT,
+  last_resume_download_at TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -79,6 +80,18 @@ CREATE TABLE IF NOT EXISTS users (
     const info = db.prepare<unknown[], { name: string }>("SELECT name FROM pragma_table_info('users') WHERE name = 'active'").get();
     if (!info) {
       db.exec("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
+    }
+  } catch (_) {}
+
+  // Migration: add last_resume_download_at for tracking resume download time
+  try {
+    const info = db
+      .prepare<unknown[], { name: string }>(
+        "SELECT name FROM pragma_table_info('job_applications') WHERE name = 'last_resume_download_at'"
+      )
+      .get();
+    if (!info) {
+      db.exec("ALTER TABLE job_applications ADD COLUMN last_resume_download_at TEXT");
     }
   } catch (_) {}
 
@@ -263,6 +276,7 @@ export interface JobApplicationRow {
   /** 0 = not applied, 1 = applied */
   applied_manually: number;
   gpt_chat_url: string | null;
+  last_resume_download_at: string | null;
   created_at: string;
 }
 
@@ -277,7 +291,7 @@ function slug(s: string): string {
 /** Returns job applications in storage order. If profileId is provided, only rows for that profile. */
 export function listJobApplications(profileId?: string | null): JobApplicationRow[] {
   const cols =
-    "id, date, company_name, title, job_url, profile_id, resume_file_name, job_description, applied_manually, gpt_chat_url, created_at";
+    "id, date, company_name, title, job_url, profile_id, resume_file_name, job_description, applied_manually, gpt_chat_url, last_resume_download_at, created_at";
   const order = " ORDER BY rowid ASC";
   if (profileId != null && String(profileId).trim() !== "") {
     const rows = db
@@ -294,6 +308,7 @@ export function listJobApplications(profileId?: string | null): JobApplicationRo
           job_description: string;
           applied_manually: number;
           gpt_chat_url: string | null;
+          last_resume_download_at: string | null;
           created_at: string;
         }
       >(`SELECT ${cols} FROM job_applications WHERE profile_id = ?${order}`)
@@ -314,6 +329,7 @@ export function listJobApplications(profileId?: string | null): JobApplicationRo
         job_description: string;
         applied_manually: number;
         gpt_chat_url: string | null;
+        last_resume_download_at: string | null;
         created_at: string;
       }
     >(`SELECT ${cols} FROM job_applications${order}`)
@@ -360,10 +376,11 @@ export function getJobApplication(id: string): JobApplicationRow | undefined {
         job_description: string;
         applied_manually: number;
         gpt_chat_url: string | null;
+        last_resume_download_at: string | null;
         created_at: string;
       }
     >(
-      "SELECT id, date, company_name, title, job_url, profile_id, resume_file_name, job_description, applied_manually, gpt_chat_url, created_at FROM job_applications WHERE id = ?"
+      "SELECT id, date, company_name, title, job_url, profile_id, resume_file_name, job_description, applied_manually, gpt_chat_url, last_resume_download_at, created_at FROM job_applications WHERE id = ?"
     )
     .get(id);
   return row ?? undefined;
@@ -412,10 +429,11 @@ export function createJobApplication(params: {
     job_description: typeof params.job_description === "string" ? params.job_description : "",
     applied_manually: appliedValue,
     gpt_chat_url: params.gpt_chat_url ?? null,
+    last_resume_download_at: null,
     created_at: now,
   };
   db.prepare(
-    "INSERT INTO job_applications (id, date, company_name, title, job_url, profile_id, resume_file_name, job_description, applied_manually, gpt_chat_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO job_applications (id, date, company_name, title, job_url, profile_id, resume_file_name, job_description, applied_manually, gpt_chat_url, last_resume_download_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     row.id,
     row.date,
@@ -427,6 +445,7 @@ export function createJobApplication(params: {
     row.job_description,
     row.applied_manually,
     row.gpt_chat_url,
+    row.last_resume_download_at,
     row.created_at
   );
   return row;
@@ -444,6 +463,7 @@ export function updateJobApplication(
     job_description?: string | null;
     applied_manually?: number | boolean;
     gpt_chat_url?: string | null;
+    last_resume_download_at?: string | null;
   }
 ): void {
   const existing = getJobApplication(id);
@@ -481,9 +501,13 @@ export function updateJobApplication(
           ? updates.gpt_chat_url
           : null
         : existing.gpt_chat_url,
+    last_resume_download_at:
+      updates.last_resume_download_at !== undefined
+        ? updates.last_resume_download_at
+        : existing.last_resume_download_at ?? null,
   };
   db.prepare(
-    "UPDATE job_applications SET date = ?, company_name = ?, title = ?, job_url = ?, profile_id = ?, resume_file_name = ?, job_description = ?, applied_manually = ?, gpt_chat_url = ? WHERE id = ?"
+    "UPDATE job_applications SET date = ?, company_name = ?, title = ?, job_url = ?, profile_id = ?, resume_file_name = ?, job_description = ?, applied_manually = ?, gpt_chat_url = ?, last_resume_download_at = ? WHERE id = ?"
   ).run(
     next.date,
     next.company_name,
@@ -494,6 +518,7 @@ export function updateJobApplication(
     next.job_description,
     next.applied_manually,
     next.gpt_chat_url,
+    next.last_resume_download_at,
     id
   );
 }

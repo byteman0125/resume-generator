@@ -85,3 +85,14 @@ The desktop app exposes a **global, always-on-top profile flyout** as a small dr
 - Position persistence shares the existing `settings.json` in the Electron `userData` directory.
 - If no profile has been loaded into the application modal yet, the flyout shows a small helper message instead of fields.
 
+#### Resume download tracking
+
+- Each job application record now stores a `last_resume_download_at` timestamp on the server.
+- The desktop **Job Applications** table:
+  - Uses a **download icon** in the **Resume file** column for rows that already have a generated PDF.
+  - Clicking the download icon:
+    - Downloads the resume PDF via Electron (or browser fallback).
+    - Updates `last_resume_download_at` for that application on the server.
+    - Updates the local table state so the UI reflects the new time immediately.
+  - The last download time is shown next to the icon in a small font on the **same line** (no extra line wrap).
+
